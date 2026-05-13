@@ -1,6 +1,7 @@
 [build]
 builder      = "nixpacks"
 buildCommand = "pnpm install --frozen-lockfile && pnpm --filter api build"
+watchPatterns = ["packages/api/**", "packages/shared/**", "pnpm-lock.yaml"]
 
 [deploy]
 startCommand  = "node packages/api/dist/index.js"
