@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+
+    <title>SyncTool</title>
+    <organization>com.synctool</organization>
+    <domains enable_localSystem="false" enable_currentUserHome="true"/>
+
+    <!-- Installer wizard pages -->
+    <welcome    file="welcome.html"   mime-type="text/html"/>
+    <license    file="license.txt"    mime-type="text/plain"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+
+    <!-- Require macOS 12 Monterey or later -->
+    <os-version min="12.0"/>
+
+    <!-- Target: current user's home, not system-wide (no sudo needed) -->
+    <options customize="never" require-scripts="true" rootVolumeOnly="false"/>
+
+    <choices-outline>
+        <line choice="com.synctool.choice"/>
+    </choices-outline>
+
+    <choice
+        id="com.synctool.choice"
+        visible="false"
+        title="SyncTool"
+        description="Installs the SyncTool sync engine and web interface.">
+        <pkg-ref id="com.synctool.pkg"/>
+    </choice>
+
+    <pkg-ref id="com.synctool.pkg" version="0.1.0" onConclusion="none">synctool-component.pkg</pkg-ref>
+
+</installer-gui-script>

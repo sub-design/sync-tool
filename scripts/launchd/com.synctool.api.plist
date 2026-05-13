@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.synctool.api</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>INSTALL_DIR_PLACEHOLDER/bin/node</string>
+        <string>INSTALL_DIR_PLACEHOLDER/app/packages/api/dist/index.js</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PORT</key>
+        <string>3001</string>
+        <key>DATA_DIR</key>
+        <string>HOME_PLACEHOLDER/Library/Application Support/SyncTool</string>
+        <key>NODE_ENV</key>
+        <string>production</string>
+    </dict>
+
+    <!-- Start automatically when the user logs in -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if it crashes -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- Throttle restarts to avoid CPU spin on a crash loop -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>HOME_PLACEHOLDER/Library/Logs/SyncTool/api.log</string>
+    <key>StandardErrorPath</key>
+    <string>HOME_PLACEHOLDER/Library/Logs/SyncTool/api.error.log</string>
+</dict>
+</plist>

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.synctool.agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>INSTALL_DIR_PLACEHOLDER/bin/node</string>
+        <string>INSTALL_DIR_PLACEHOLDER/app/packages/agent/dist/index.js</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>API_URL</key>
+        <string>ws://localhost:3001/agent</string>
+        <!-- Persist this device ID across restarts. Set a stable UUID during install. -->
+        <key>DEVICE_ID</key>
+        <string>DEVICE_ID_PLACEHOLDER</string>
+        <key>NODE_ENV</key>
+        <string>production</string>
+    </dict>
+
+    <!-- Wait for API server to be available before starting -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>HOME_PLACEHOLDER/Library/Logs/SyncTool/agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>HOME_PLACEHOLDER/Library/Logs/SyncTool/agent.error.log</string>
+</dict>
+</plist>

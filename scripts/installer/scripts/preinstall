@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# preinstall — runs before copying files. Fails fast if requirements not met.
+
+set -euo pipefail
+
+# macOS 12+
+OS_VER=$(sw_vers -productVersion | cut -d. -f1)
+(( OS_VER >= 12 )) || { echo "ERROR: macOS 12 Monterey or later required."; exit 1; }
+
+# Node.js 18+
+NODE_BIN=$(command -v node 2>/dev/null || true)
+if [[ -z "$NODE_BIN" ]]; then
+    for candidate in /opt/homebrew/bin/node /usr/local/bin/node; do
+        [[ -x "$candidate" ]] && { NODE_BIN="$candidate"; break; }
+    done
+fi
+
+if [[ -z "$NODE_BIN" ]]; then
+    echo "ERROR: Node.js not found."
+    echo "Install it from https://nodejs.org or via Homebrew: brew install node"
+    exit 1
+fi
+
+NODE_MAJOR=$("$NODE_BIN" --version | grep -oE '[0-9]+' | head -1)
+(( NODE_MAJOR >= 18 )) || {
+    echo "ERROR: Node.js $NODE_MAJOR is too old. Need 18 or later."
+    exit 1
+}
+
+echo "Preflight passed. Node.js $("$NODE_BIN" --version) at $NODE_BIN"
+exit 0
