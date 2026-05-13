@@ -106,9 +106,6 @@ importers:
       '@types/bcryptjs':
         specifier: ^3.0.0
         version: 3.0.0
-      '@types/better-sqlite3':
-        specifier: ^7.6.10
-        version: 7.6.13
       '@types/cors':
         specifier: ^2.8.17
         version: 2.8.19
