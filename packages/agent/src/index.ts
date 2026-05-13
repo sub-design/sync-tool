@@ -12,15 +12,25 @@ import type { AgentToServer, ServerToAgent, Job } from '@sync-tool/shared'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const API_WS_URL  = process.env.API_URL  ?? 'ws://localhost:3001/agent'
+const API_WS_BASE = process.env.API_URL  ?? 'ws://localhost:3001/agent'
+const AGENT_TOKEN = process.env.AGENT_TOKEN  // required in production
 const DEVICE_ID   = process.env.DEVICE_ID ?? uuid()   // persist this in production
 const RELAY_URL   = process.env.RELAY_URL
 const RECONNECT_MS = 5_000
 const DEFAULT_CONCURRENCY = Math.max(1, parseInt(process.env.AGENT_CONCURRENCY ?? '2', 10))
 
+// Append auth token to WS URL
+const API_WS_URL = AGENT_TOKEN
+  ? `${API_WS_BASE}${API_WS_BASE.includes('?') ? '&' : '?'}token=${encodeURIComponent(AGENT_TOKEN)}`
+  : API_WS_BASE
+
+if (!AGENT_TOKEN) {
+  console.warn('[agent] AGENT_TOKEN not set — connection will be rejected by authenticated servers')
+}
+
 console.log(`[agent] Device ID : ${DEVICE_ID}`)
 console.log(`[agent] Hostname  : ${os.hostname()}`)
-console.log(`[agent] Connecting: ${API_WS_URL}`)
+console.log(`[agent] Connecting: ${API_WS_BASE}`)
 if (RELAY_URL) console.log(`[agent] Relay URL : ${RELAY_URL}`)
 
 const relay = RELAY_URL ? new RelayClient(RELAY_URL, DEVICE_ID) : undefined

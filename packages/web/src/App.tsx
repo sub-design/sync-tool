@@ -1,10 +1,17 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { isLoggedIn } from '@/lib/auth'
 import Dashboard from './routes/Dashboard'
 import JobDetail from './routes/JobDetail'
+import Devices from './routes/Devices'
+import Login from './routes/Login'
 
 const queryClient = new QueryClient()
+
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  return isLoggedIn() ? <>{children}</> : <Navigate to="/login" replace />
+}
 
 export default function App() {
   return (
@@ -12,8 +19,10 @@ export default function App() {
       <TooltipProvider>
         <BrowserRouter>
           <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/jobs/:id" element={<JobDetail />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />
+            <Route path="/jobs/:id" element={<RequireAuth><JobDetail /></RequireAuth>} />
+            <Route path="/devices" element={<RequireAuth><Devices /></RequireAuth>} />
           </Routes>
         </BrowserRouter>
       </TooltipProvider>

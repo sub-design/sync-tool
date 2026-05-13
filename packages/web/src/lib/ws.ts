@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import type { ServerToBrowser, SyncProgress } from '../types'
+import { getToken } from './auth'
 
-const WS_URL = (import.meta.env.VITE_WS_URL as string | undefined) ?? 'ws://localhost:3001'
+const WS_BASE = (import.meta.env.VITE_WS_URL as string | undefined) ?? 'ws://localhost:3001'
 
 type Listener = (msg: ServerToBrowser) => void
 const listeners = new Map<string, Set<Listener>>()
@@ -13,7 +14,11 @@ function notify(msg: ServerToBrowser) {
 let ws: WebSocket | null = null
 
 function connect() {
-  ws = new WebSocket(WS_URL)
+  const token = getToken()
+  if (!token) return  // Don't connect if not logged in
+
+  const url = `${WS_BASE}?token=${encodeURIComponent(token)}`
+  ws = new WebSocket(url)
 
   ws.onmessage = (event: MessageEvent) => {
     try {
@@ -25,11 +30,19 @@ function connect() {
     }
   }
 
-  ws.onclose = () => setTimeout(connect, 3000)
+  ws.onclose = () => {
+    if (getToken()) setTimeout(connect, 3000)
+  }
   ws.onerror = () => { ws?.close() }
 }
 
 connect()
+
+// Re-connect after login
+export function reconnectWs(): void {
+  ws?.close()
+  connect()
+}
 
 export function subscribe<T extends ServerToBrowser['type']>(
   type: T,

@@ -1,236 +1,287 @@
-import Database from 'better-sqlite3'
-import { existsSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import postgres from 'postgres'
 import type { Job, SyncResult } from '@sync-tool/shared'
 
-// ── Setup ─────────────────────────────────────────────────────────────────────
+// ── Connection ────────────────────────────────────────────────────────────────
 
-const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), '.data')
-if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true })
+const DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://localhost/sync_tool'
 
-const db: Database.Database = new Database(join(DATA_DIR, 'sync-tool.db'))
-db.pragma('journal_mode = WAL')   // safe concurrent reads
-db.pragma('foreign_keys = ON')
+export const sql = postgres(DATABASE_URL, {
+  max:          10,
+  idle_timeout: 20,
+  onnotice:     () => {},  // suppress NOTICE messages
+})
 
-// ── Schema ────────────────────────────────────────────────────────────────────
+// ── Schema init ───────────────────────────────────────────────────────────────
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS jobs (
-    id          TEXT    PRIMARY KEY,
-    name        TEXT    NOT NULL,
-    source      TEXT    NOT NULL,
-    destination TEXT    NOT NULL,
-    direction   TEXT    NOT NULL DEFAULT 'ltr',
-    transfer_mode TEXT  DEFAULT 'auto',
-    reliability TEXT    DEFAULT '{}',
-	    source_device_id TEXT,
-	    destination_device_id TEXT,
-	    watch       INTEGER NOT NULL DEFAULT 0,
-	    schedule    TEXT,
-    status      TEXT    NOT NULL DEFAULT 'idle',
-    last_run    INTEGER,
-    last_error  TEXT,
-    created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL
-  );
+export async function initDb(): Promise<void> {
+  await sql`
+    CREATE TABLE IF NOT EXISTS users (
+      id            TEXT    PRIMARY KEY,
+      email         TEXT    NOT NULL UNIQUE,
+      password_hash TEXT    NOT NULL,
+      created_at    BIGINT  NOT NULL
+    )
+  `
 
-  CREATE TABLE IF NOT EXISTS sync_log (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_id            TEXT    NOT NULL,
-    started_at        INTEGER NOT NULL,
-    ended_at          INTEGER,
-    files_copied      INTEGER DEFAULT 0,
-    files_skipped     INTEGER DEFAULT 0,
-    files_errored     INTEGER DEFAULT 0,
-    bytes_transferred INTEGER DEFAULT 0,
-    logical_bytes     INTEGER DEFAULT 0,
-    delta_bytes       INTEGER DEFAULT 0,
-    full_bytes        INTEGER DEFAULT 0,
-    delta_files       INTEGER DEFAULT 0,
-    full_files        INTEGER DEFAULT 0,
-    errors            TEXT    DEFAULT '[]',
-    FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
-  );
-`)
+  await sql`
+    CREATE TABLE IF NOT EXISTS agent_tokens (
+      id         TEXT   PRIMARY KEY,
+      user_id    TEXT   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name       TEXT   NOT NULL,
+      token_hash TEXT   NOT NULL UNIQUE,
+      created_at BIGINT NOT NULL
+    )
+  `
 
-const jobColumns = db.prepare('PRAGMA table_info(jobs)').all() as Array<{ name: string }>
-if (!jobColumns.some((column) => column.name === 'transfer_mode')) {
-  db.exec(`ALTER TABLE jobs ADD COLUMN transfer_mode TEXT DEFAULT 'auto'`)
-}
-if (!jobColumns.some((column) => column.name === 'reliability')) {
-  db.exec(`ALTER TABLE jobs ADD COLUMN reliability TEXT DEFAULT '{}'`)
-}
-if (!jobColumns.some((column) => column.name === 'source_device_id')) {
-  db.exec(`ALTER TABLE jobs ADD COLUMN source_device_id TEXT`)
-}
-if (!jobColumns.some((column) => column.name === 'destination_device_id')) {
-  db.exec(`ALTER TABLE jobs ADD COLUMN destination_device_id TEXT`)
-}
-if (!jobColumns.some((column) => column.name === 'watch')) {
-  db.exec(`ALTER TABLE jobs ADD COLUMN watch INTEGER NOT NULL DEFAULT 0`)
-}
+  await sql`
+    CREATE TABLE IF NOT EXISTS jobs (
+      id                    TEXT   PRIMARY KEY,
+      user_id               TEXT   REFERENCES users(id) ON DELETE CASCADE,
+      name                  TEXT   NOT NULL,
+      source                TEXT   NOT NULL,
+      destination           TEXT   NOT NULL,
+      direction             TEXT   NOT NULL DEFAULT 'ltr',
+      transfer_mode         TEXT   DEFAULT 'auto',
+      reliability           TEXT   DEFAULT '{}',
+      source_device_id      TEXT,
+      destination_device_id TEXT,
+      watch                 BOOLEAN NOT NULL DEFAULT false,
+      schedule              TEXT,
+      status                TEXT   NOT NULL DEFAULT 'idle',
+      last_run              BIGINT,
+      last_error            TEXT,
+      created_at            BIGINT NOT NULL,
+      updated_at            BIGINT NOT NULL
+    )
+  `
 
-const syncLogColumns = db.prepare('PRAGMA table_info(sync_log)').all() as Array<{ name: string }>
-for (const [name, ddl] of [
-  ['logical_bytes', 'ALTER TABLE sync_log ADD COLUMN logical_bytes INTEGER DEFAULT 0'],
-  ['delta_bytes', 'ALTER TABLE sync_log ADD COLUMN delta_bytes INTEGER DEFAULT 0'],
-  ['full_bytes', 'ALTER TABLE sync_log ADD COLUMN full_bytes INTEGER DEFAULT 0'],
-  ['delta_files', 'ALTER TABLE sync_log ADD COLUMN delta_files INTEGER DEFAULT 0'],
-  ['full_files', 'ALTER TABLE sync_log ADD COLUMN full_files INTEGER DEFAULT 0'],
-] as const) {
-  if (!syncLogColumns.some((column) => column.name === name)) db.exec(ddl)
-}
+  await sql`
+    CREATE TABLE IF NOT EXISTS sync_log (
+      id                BIGSERIAL PRIMARY KEY,
+      job_id            TEXT   NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      started_at        BIGINT NOT NULL,
+      ended_at          BIGINT,
+      files_copied      INT    DEFAULT 0,
+      files_skipped     INT    DEFAULT 0,
+      files_errored     INT    DEFAULT 0,
+      bytes_transferred BIGINT DEFAULT 0,
+      logical_bytes     BIGINT DEFAULT 0,
+      delta_bytes       BIGINT DEFAULT 0,
+      full_bytes        BIGINT DEFAULT 0,
+      delta_files       INT    DEFAULT 0,
+      full_files        INT    DEFAULT 0,
+      errors            TEXT   DEFAULT '[]'
+    )
+  `
 
-// ── Job helpers ───────────────────────────────────────────────────────────────
-
-function rowToJob(row: any): Job {
-  return {
-    id:          row.id,
-    name:        row.name,
-    source:      row.source,
-    destination: row.destination,
-    direction:   row.direction,
-    transferMode: row.transfer_mode ?? 'auto',
-    reliability: parseReliability(row.reliability),
-	    sourceDeviceId: row.source_device_id ?? undefined,
-	    destinationDeviceId: row.destination_device_id ?? undefined,
-	    watch:       Boolean(row.watch),
-	    schedule:    row.schedule   ?? undefined,
-    status:      row.status,
-    lastRun:     row.last_run   ?? undefined,
-    lastError:   row.last_error ?? undefined,
-    createdAt:   row.created_at,
-    updatedAt:   row.updated_at,
+  // Idempotent column additions (safe to run repeatedly)
+  for (const stmt of [
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS transfer_mode TEXT DEFAULT 'auto'`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS reliability TEXT DEFAULT '{}'`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS source_device_id TEXT`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS destination_device_id TEXT`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS watch BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS logical_bytes BIGINT DEFAULT 0`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS delta_bytes BIGINT DEFAULT 0`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS full_bytes BIGINT DEFAULT 0`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS delta_files INT DEFAULT 0`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS full_files INT DEFAULT 0`,
+  ]) {
+    await sql.unsafe(stmt)
   }
 }
 
-// ── Job CRUD ──────────────────────────────────────────────────────────────────
+// ── Row mappers ───────────────────────────────────────────────────────────────
 
-export const jobsDb = {
-  list(): Job[] {
-    return (db.prepare('SELECT * FROM jobs ORDER BY created_at DESC').all() as any[]).map(rowToJob)
+function rowToJob(row: Record<string, unknown>): Job {
+  return {
+    id:                  row.id as string,
+    name:                row.name as string,
+    source:              row.source as string,
+    destination:         row.destination as string,
+    direction:           row.direction as Job['direction'],
+    transferMode:        ((row.transfer_mode as string) ?? 'auto') as Job['transferMode'],
+    reliability:         parseJson(row.reliability as string),
+    sourceDeviceId:      (row.source_device_id as string) ?? undefined,
+    destinationDeviceId: (row.destination_device_id as string) ?? undefined,
+    watch:               Boolean(row.watch),
+    schedule:            (row.schedule as string) ?? undefined,
+    status:              row.status as Job['status'],
+    lastRun:             row.last_run != null ? Number(row.last_run) : undefined,
+    lastError:           (row.last_error as string) ?? undefined,
+    createdAt:           Number(row.created_at),
+    updatedAt:           Number(row.updated_at),
+  }
+}
+
+function parseJson(value: unknown): Job['reliability'] {
+  if (!value || typeof value !== 'string') return {}
+  try { const p = JSON.parse(value); return p && typeof p === 'object' ? p : {} } catch { return {} }
+}
+
+// ── Users ─────────────────────────────────────────────────────────────────────
+
+export interface UserRow {
+  id:           string
+  email:        string
+  passwordHash: string
+  createdAt:    number
+}
+
+export const usersDb = {
+  async count(): Promise<number> {
+    const [{ n }] = await sql<[{ n: string }]>`SELECT COUNT(*)::text AS n FROM users`
+    return parseInt(n)
   },
 
-  get(id: string): Job | undefined {
-    const row = db.prepare('SELECT * FROM jobs WHERE id = ?').get(id) as any
+  async create(id: string, email: string, passwordHash: string): Promise<UserRow> {
+    const now = Date.now()
+    await sql`INSERT INTO users (id, email, password_hash, created_at) VALUES (${id}, ${email}, ${passwordHash}, ${now})`
+    return { id, email, passwordHash, createdAt: now }
+  },
+
+  async getByEmail(email: string): Promise<UserRow | undefined> {
+    const [row] = await sql`SELECT * FROM users WHERE email = ${email}`
+    return row ? { id: row.id, email: row.email, passwordHash: row.password_hash, createdAt: Number(row.created_at) } : undefined
+  },
+
+  async getById(id: string): Promise<UserRow | undefined> {
+    const [row] = await sql`SELECT * FROM users WHERE id = ${id}`
+    return row ? { id: row.id, email: row.email, passwordHash: row.password_hash, createdAt: Number(row.created_at) } : undefined
+  },
+
+  async createToken(id: string, userId: string, name: string, tokenHash: string): Promise<void> {
+    await sql`INSERT INTO agent_tokens (id, user_id, name, token_hash, created_at) VALUES (${id}, ${userId}, ${name}, ${tokenHash}, ${Date.now()})`
+  },
+
+  async listTokens(userId: string): Promise<Array<{ id: string; name: string; createdAt: number }>> {
+    const rows = await sql`SELECT id, name, created_at FROM agent_tokens WHERE user_id = ${userId} ORDER BY created_at DESC`
+    return rows.map((r) => ({ id: r.id, name: r.name, createdAt: Number(r.created_at) }))
+  },
+
+  async deleteToken(id: string, userId: string): Promise<boolean> {
+    const result = await sql`DELETE FROM agent_tokens WHERE id = ${id} AND user_id = ${userId}`
+    return result.count > 0
+  },
+
+  async getUserIdByToken(tokenHash: string): Promise<string | undefined> {
+    const [row] = await sql`SELECT user_id FROM agent_tokens WHERE token_hash = ${tokenHash}`
+    return row?.user_id
+  },
+}
+
+// ── Jobs ──────────────────────────────────────────────────────────────────────
+
+export const jobsDb = {
+  async list(): Promise<Job[]> {
+    const rows = await sql`SELECT * FROM jobs ORDER BY created_at DESC`
+    return rows.map(rowToJob)
+  },
+
+  async listForUser(userId: string): Promise<Job[]> {
+    const rows = await sql`SELECT * FROM jobs WHERE user_id = ${userId} ORDER BY created_at DESC`
+    return rows.map(rowToJob)
+  },
+
+  async get(id: string): Promise<Job | undefined> {
+    const [row] = await sql`SELECT * FROM jobs WHERE id = ${id}`
     return row ? rowToJob(row) : undefined
   },
 
-  create(job: Omit<Job, 'status' | 'createdAt' | 'updatedAt'>): Job {
-    const now = Date.now()
+  async getUserId(id: string): Promise<string | undefined> {
+    const [row] = await sql`SELECT user_id FROM jobs WHERE id = ${id}`
+    return row?.user_id ?? undefined
+  },
+
+  async create(job: Omit<Job, 'status' | 'createdAt' | 'updatedAt'>, userId: string): Promise<Job> {
+    const now  = Date.now()
     const full: Job = { ...job, status: 'idle', createdAt: now, updatedAt: now }
-    db.prepare(`
+    await sql`
       INSERT INTO jobs
-        (id, name, source, destination, direction, transfer_mode, reliability, source_device_id, destination_device_id, watch, schedule, status, created_at, updated_at)
+        (id, user_id, name, source, destination, direction, transfer_mode, reliability,
+         source_device_id, destination_device_id, watch, schedule, status, created_at, updated_at)
       VALUES
-        (@id, @name, @source, @destination, @direction, @transferMode, @reliability, @sourceDeviceId, @destinationDeviceId, @watch, @schedule, @status, @createdAt, @updatedAt)
-    `).run({
-      ...full,
-      schedule:  full.schedule  ?? null,
-      transferMode: full.transferMode ?? 'auto',
-	      reliability: JSON.stringify(full.reliability ?? {}),
-	      sourceDeviceId: full.sourceDeviceId ?? null,
-	      destinationDeviceId: full.destinationDeviceId ?? null,
-	      watch:     full.watch ? 1 : 0,
-	      createdAt: full.createdAt,
-      updatedAt: full.updatedAt,
-    })
+        (${full.id}, ${userId}, ${full.name}, ${full.source}, ${full.destination},
+         ${full.direction}, ${full.transferMode ?? 'auto'}, ${JSON.stringify(full.reliability ?? {})},
+         ${full.sourceDeviceId ?? null}, ${full.destinationDeviceId ?? null},
+         ${full.watch ?? false}, ${full.schedule ?? null},
+         ${full.status}, ${full.createdAt}, ${full.updatedAt})
+    `
     return full
   },
 
-  update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'transferMode' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'watch' | 'schedule'>>): Job | undefined {
-    const existing = jobsDb.get(id)
+  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'transferMode' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'watch' | 'schedule'>>): Promise<Job | undefined> {
+    const existing = await jobsDb.get(id)
     if (!existing) return undefined
     const updated: Job = { ...existing, ...patch, updatedAt: Date.now() }
-    db.prepare(`
-      UPDATE jobs
-      SET name=@name, source=@source, destination=@destination,
-          direction=@direction, transfer_mode=@transferMode,
-	          reliability=@reliability,
-	          source_device_id=@sourceDeviceId, destination_device_id=@destinationDeviceId,
-	          watch=@watch, schedule=@schedule, updated_at=@updatedAt
-      WHERE id=@id
-    `).run({
-      id:          updated.id,
-      name:        updated.name,
-      source:      updated.source,
-      destination: updated.destination,
-      direction:   updated.direction,
-      transferMode: updated.transferMode ?? 'auto',
-	      reliability: JSON.stringify(updated.reliability ?? {}),
-	      sourceDeviceId: updated.sourceDeviceId ?? null,
-	      destinationDeviceId: updated.destinationDeviceId ?? null,
-	      watch:      updated.watch ? 1 : 0,
-	      schedule:    updated.schedule ?? null,
-      updatedAt:   updated.updatedAt,
-    })
+    await sql`
+      UPDATE jobs SET
+        name = ${updated.name},
+        source = ${updated.source},
+        destination = ${updated.destination},
+        direction = ${updated.direction},
+        transfer_mode = ${updated.transferMode ?? 'auto'},
+        reliability = ${JSON.stringify(updated.reliability ?? {})},
+        source_device_id = ${updated.sourceDeviceId ?? null},
+        destination_device_id = ${updated.destinationDeviceId ?? null},
+        watch = ${updated.watch ?? false},
+        schedule = ${updated.schedule ?? null},
+        updated_at = ${updated.updatedAt}
+      WHERE id = ${id}
+    `
     return updated
   },
 
-  delete(id: string): boolean {
-    return (db.prepare('DELETE FROM jobs WHERE id = ?').run(id) as any).changes > 0
+  async delete(id: string): Promise<boolean> {
+    const result = await sql`DELETE FROM jobs WHERE id = ${id}`
+    return result.count > 0
   },
 
-  // Called by agent WebSocket handler when job status changes
-  setStatus(id: string, status: Job['status'], lastError?: string) {
-    db.prepare(`
-      UPDATE jobs
-      SET status=@status, last_run=@lastRun, last_error=@lastError, updated_at=@now
-      WHERE id=@id
-    `).run({
-      id,
-      status,
-      lastRun:   status === 'completed' || status === 'error' ? Date.now() : null,
-      lastError: lastError ?? null,
-      now:       Date.now(),
-    })
+  async setStatus(id: string, status: Job['status'], lastError?: string): Promise<void> {
+    const now     = Date.now()
+    const lastRun = status === 'completed' || status === 'error' ? now : null
+    await sql`
+      UPDATE jobs SET
+        status = ${status},
+        last_run = ${lastRun},
+        last_error = ${lastError ?? null},
+        updated_at = ${now}
+      WHERE id = ${id}
+    `
   },
-}
-
-function parseReliability(value: unknown): Job['reliability'] {
-  if (!value || typeof value !== 'string') return {}
-  try {
-    const parsed = JSON.parse(value)
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return {}
-  }
 }
 
 // ── Sync log ──────────────────────────────────────────────────────────────────
 
 export const logDb = {
-  create(jobId: string): number {
-    return (db.prepare('INSERT INTO sync_log (job_id, started_at) VALUES (?, ?)').run(jobId, Date.now()) as any).lastInsertRowid as number
+  async create(jobId: string): Promise<number> {
+    const [{ id }] = await sql<[{ id: string }]>`
+      INSERT INTO sync_log (job_id, started_at) VALUES (${jobId}, ${Date.now()}) RETURNING id::text
+    `
+    return parseInt(id)
   },
 
-  complete(logId: number, result: SyncResult) {
-    db.prepare(`
-      UPDATE sync_log
-      SET ended_at=@endedAt, files_copied=@filesCopied, files_skipped=@filesSkipped,
-          files_errored=@filesErrored, bytes_transferred=@bytesTransferred,
-          logical_bytes=@logicalBytes, delta_bytes=@deltaBytes, full_bytes=@fullBytes,
-          delta_files=@deltaFiles, full_files=@fullFiles, errors=@errors
-      WHERE id=@id
-    `).run({
-      id:               logId,
-      endedAt:          result.endedAt,
-      filesCopied:      result.filesCopied,
-      filesSkipped:     result.filesSkipped,
-      filesErrored:     result.filesErrored,
-      bytesTransferred: result.bytesTransferred,
-      logicalBytes:     result.logicalBytes ?? 0,
-      deltaBytes:       result.deltaBytes ?? 0,
-      fullBytes:        result.fullBytes ?? 0,
-      deltaFiles:       result.deltaFiles ?? 0,
-      fullFiles:        result.fullFiles ?? 0,
-      errors:           JSON.stringify(result.errors),
-    })
+  async complete(logId: number, result: SyncResult): Promise<void> {
+    await sql`
+      UPDATE sync_log SET
+        ended_at          = ${result.endedAt},
+        files_copied      = ${result.filesCopied},
+        files_skipped     = ${result.filesSkipped},
+        files_errored     = ${result.filesErrored},
+        bytes_transferred = ${result.bytesTransferred},
+        logical_bytes     = ${result.logicalBytes ?? 0},
+        delta_bytes       = ${result.deltaBytes   ?? 0},
+        full_bytes        = ${result.fullBytes    ?? 0},
+        delta_files       = ${result.deltaFiles   ?? 0},
+        full_files        = ${result.fullFiles    ?? 0},
+        errors            = ${JSON.stringify(result.errors)}
+      WHERE id = ${logId}
+    `
   },
 
-  list(jobId: string, limit = 20) {
-    return db.prepare('SELECT * FROM sync_log WHERE job_id=? ORDER BY started_at DESC LIMIT ?').all(jobId, limit)
+  async list(jobId: string, limit = 20): Promise<unknown[]> {
+    const rows = await sql`SELECT * FROM sync_log WHERE job_id = ${jobId} ORDER BY started_at DESC LIMIT ${limit}`
+    return [...rows]
   },
 }
-
-export default db

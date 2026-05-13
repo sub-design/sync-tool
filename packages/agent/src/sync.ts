@@ -1,5 +1,6 @@
 import type { SyncResult, SyncProgress, Job } from '@sync-tool/shared'
 import crypto from 'crypto'
+import fs from 'fs'
 import { Transform } from 'stream'
 import pRetry from 'p-retry'
 import { transferFileDelta } from './delta/engine'
@@ -503,11 +504,25 @@ async function backfillChecksum(
     streamSHA256(await srcBackend.read(srcEntry.absolutePath)),
     streamSHA256(await dstBackend.read(dstEntry.absolutePath)),
   ])
+  await Promise.all([
+    assertEntryStable(srcEntry, srcBackend, 'source'),
+    assertEntryStable(dstEntry, dstBackend, 'destination'),
+  ])
 
   if (srcHash !== dstHash) {
     throw new Error(`source/destination checksum mismatch for ${rel}`)
   }
   return srcHash
+}
+
+async function assertEntryStable(entry: FileEntry, backend: StorageBackend, label: string): Promise<void> {
+  const localPath = backend.localPath?.(entry.absolutePath)
+  if (!localPath) return
+
+  const stat = await fs.promises.stat(localPath)
+  if (stat.size !== entry.size || !mtimeEqual(stat.mtimeMs, entry.mtimeMs)) {
+    throw new Error(`${label} changed while hashing`)
+  }
 }
 
 async function transferFile(

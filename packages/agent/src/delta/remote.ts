@@ -163,6 +163,17 @@ async function runRemoteBidirectionalSync(
     const targetFiles   = new Map(targetEntries.map((entry) => [entry.relativePath, entry]))
     const prevState     = state.getJobState(job.id)
     const newState      = new Map<string, StoredFileState>()
+    const movedChecksums = await detectAndApplyRemoteMoves({
+      sourceFiles,
+      targetFiles,
+      prevState,
+      sourceBackend: source.backend,
+      sourceRoot: source.rootPath,
+      relay,
+      targetDeviceId: destinationDeviceId,
+      targetRoot: job.destination,
+      signal,
+    })
     const allPaths      = new Set([...sourceFiles.keys(), ...targetFiles.keys()])
     const entries       = [...allPaths].filter((rel) => !(sourceFiles.get(rel)?.isDirectory))
     let   processed     = 0
@@ -175,7 +186,7 @@ async function runRemoteBidirectionalSync(
       const prev        = prevState.get(rel)
       let stateSourceEntry: StateFileSnapshot | undefined = sourceEntry
       let stateTargetEntry: StateFileSnapshot | undefined = targetEntry
-      let checksum = prev?.checksum
+      let checksum = prev?.checksum ?? movedChecksums.get(rel)
 
       const firstSync   = !prev
       const srcChanged  = fileChanged(sourceEntry, prev, 'src')
@@ -291,10 +302,160 @@ export function registerRemoteDeltaHandlers(relay: RelayClient) {
         return handleSendFull(relay, from, body.root, body.relativePath, body.targetRoot)
       case 'delta:send-delta':
         return handleSendDelta(relay, from, body.root, body.relativePath, body.targetRoot, body.signature, body.mode)
+      case 'delta:move':
+        return handleMove(body.root, body.fromRelativePath, body.toRelativePath, body.meta)
       default:
         throw new Error(`Unsupported relay method: ${method}`)
     }
   })
+}
+
+interface RemoteMoveInput {
+  sourceFiles: Map<string, FileEntry>
+  targetFiles: Map<string, RemoteManifestEntry>
+  prevState: Map<string, StoredFileState>
+  sourceBackend: StorageBackend
+  sourceRoot: string
+  relay: RelayClient
+  targetDeviceId: string
+  targetRoot: string
+  signal?: AbortSignal
+}
+
+async function detectAndApplyRemoteMoves(input: RemoteMoveInput): Promise<Map<string, string>> {
+  const sourceMoves = await detectRemoteSideMoves({
+    changedFiles: input.sourceFiles,
+    mirrorFiles: input.targetFiles,
+    prevState: input.prevState,
+    changedSide: 'src',
+    changedBackend: input.sourceBackend,
+    moveMirror: async (fromRel, toRel, entry) => {
+      await input.relay.request(input.targetDeviceId, 'delta:move', {
+        root: input.targetRoot,
+        fromRelativePath: fromRel,
+        toRelativePath: toRel,
+        meta: { size: entry.size, mtimeMs: entry.mtimeMs },
+      })
+    },
+    mirrorRoot: input.targetRoot,
+    signal: input.signal,
+  })
+
+  const targetMoves = await detectRemoteSideMoves({
+    changedFiles: input.targetFiles,
+    mirrorFiles: input.sourceFiles,
+    prevState: input.prevState,
+    changedSide: 'dst',
+    changedBackend: undefined,
+    moveMirror: async (fromRel, toRel, entry) => {
+      if (!input.sourceBackend.move) throw new Error('source backend does not support move')
+      await input.sourceBackend.move(
+        joinRemote(input.sourceRoot, fromRel),
+        joinRemote(input.sourceRoot, toRel),
+        { size: entry.size, mtimeMs: entry.mtimeMs },
+      )
+    },
+    mirrorRoot: input.sourceRoot,
+    signal: input.signal,
+  })
+
+  return new Map([...sourceMoves, ...targetMoves])
+}
+
+interface RemoteSideMoveInput {
+  changedFiles: Map<string, FileEntry | RemoteManifestEntry>
+  mirrorFiles: Map<string, FileEntry | RemoteManifestEntry>
+  prevState: Map<string, StoredFileState>
+  changedSide: 'src' | 'dst'
+  changedBackend?: StorageBackend
+  moveMirror: (fromRel: string, toRel: string, entry: FileEntry | RemoteManifestEntry) => Promise<void>
+  mirrorRoot: string
+  signal?: AbortSignal
+}
+
+async function detectRemoteSideMoves(input: RemoteSideMoveInput): Promise<Map<string, string>> {
+  const movedChecksums = new Map<string, string>()
+  const missingByChecksum = new Map<string, string[]>()
+
+  for (const [rel, prev] of input.prevState) {
+    throwIfAborted(input.signal)
+    if (input.changedFiles.has(rel) || !input.mirrorFiles.has(rel)) continue
+    if (!existedOnBothSides(prev) || !prev.checksum) continue
+
+    const mirrorEntry = input.mirrorFiles.get(rel)!
+    if (fileChanged(mirrorEntry, prev, input.changedSide === 'src' ? 'dst' : 'src')) continue
+
+    const prevSize = input.changedSide === 'src' ? prev.srcSize : prev.dstSize
+    if (prevSize == null || mirrorEntry.size !== prevSize) continue
+
+    const key = checksumMoveKey(prev.checksum, prevSize)
+    const paths = missingByChecksum.get(key) ?? []
+    paths.push(rel)
+    missingByChecksum.set(key, paths)
+  }
+
+  const addedByChecksum = new Map<string, string[]>()
+  for (const [rel, entry] of input.changedFiles) {
+    throwIfAborted(input.signal)
+    if (input.mirrorFiles.has(rel) || input.prevState.has(rel)) continue
+
+    const checksum = input.changedSide === 'src'
+      ? await streamSHA256(await input.changedBackend!.read((entry as FileEntry).absolutePath))
+      : checksumForRemoteAddedEntry(rel, entry, input.prevState)
+    if (!checksum) continue
+
+    const key = checksumMoveKey(checksum, entry.size)
+    const paths = addedByChecksum.get(key) ?? []
+    paths.push(rel)
+    addedByChecksum.set(key, paths)
+  }
+
+  for (const [key, addedPaths] of addedByChecksum) {
+    throwIfAborted(input.signal)
+    const missingPaths = missingByChecksum.get(key)
+    if (!missingPaths || addedPaths.length !== 1 || missingPaths.length !== 1) continue
+
+    const fromRel = missingPaths[0]
+    const toRel = addedPaths[0]
+    const toEntry = input.changedFiles.get(toRel)
+    const mirrorEntry = input.mirrorFiles.get(fromRel)
+    if (!toEntry || !mirrorEntry) continue
+
+    await input.moveMirror(fromRel, toRel, toEntry)
+    input.mirrorFiles.delete(fromRel)
+    input.mirrorFiles.set(toRel, {
+      ...mirrorEntry,
+      relativePath: toRel,
+      absolutePath: joinRemote(input.mirrorRoot, toRel),
+      size:         toEntry.size,
+      mtimeMs:      toEntry.mtimeMs,
+    })
+    movedChecksums.set(toRel, key.slice(0, key.lastIndexOf(':')))
+  }
+
+  return movedChecksums
+}
+
+function checksumForRemoteAddedEntry(
+  rel: string,
+  entry: FileEntry | RemoteManifestEntry,
+  prevState: Map<string, StoredFileState>,
+): string | undefined {
+  const candidates: string[] = []
+  for (const [, prev] of prevState) {
+    if (!prev.checksum || prev.dstSize !== entry.size) continue
+    candidates.push(prev.checksum)
+  }
+  const unique = [...new Set(candidates)]
+  return unique.length === 1 ? unique[0] : undefined
+}
+
+function existedOnBothSides(prev: StoredFileState): boolean {
+  return prev.srcSize != null && prev.srcMtimeMs != null && prev.dstSize != null && prev.dstMtimeMs != null
+}
+
+function checksumMoveKey(checksum: string, size: number): string {
+  return `${checksum}:${size}`
 }
 
 function applyRemoteTransferStats(result: SyncResult, logicalBytes: number, stats: RemoteTransferStats) {
@@ -681,6 +842,26 @@ async function handleSendDelta(
   } finally {
     await source.backend.close?.()
     await fs.promises.rm(workDir, { recursive: true, force: true })
+  }
+}
+
+async function handleMove(
+  root: string,
+  fromRelativePath: string,
+  toRelativePath: string,
+  meta: { size: number; mtimeMs: number },
+) {
+  const target = resolveBackend(root)
+  try {
+    if (!target.backend.move) throw new Error('target backend does not support move')
+    await target.backend.move(
+      joinRemote(target.rootPath, fromRelativePath),
+      joinRemote(target.rootPath, toRelativePath),
+      meta,
+    )
+    return { ok: true }
+  } finally {
+    await target.backend.close?.()
   }
 }
 
