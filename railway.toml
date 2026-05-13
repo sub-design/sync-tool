@@ -1,6 +1,6 @@
 [build]
 builder      = "nixpacks"
-buildCommand = "pnpm install --frozen-lockfile && pnpm --filter api build"
+buildCommand = "pnpm install && pnpm --filter api build"
 watchPatterns = ["packages/api/**", "packages/shared/**", "pnpm-lock.yaml"]
 
 [deploy]
