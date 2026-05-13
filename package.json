@@ -16,6 +16,6 @@
     "typescript": "^5.4.5"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["msw", "better-sqlite3", "esbuild", "ssh2", "cpu-features"]
+    "onlyBuiltDependencies": ["msw", "esbuild", "ssh2", "cpu-features"]
   }
 }
