@@ -11,7 +11,7 @@ import { notifyJob } from './notifications'
 import { schedulerPollMs, shouldRunNow } from './scheduler'
 import type { AgentToServer, ServerToAgent, ServerToBrowser, Job } from '@sync-tool/shared'
 
-const PORT = parseInt(process.env.PORT ?? '3001')
+const PORT = parseInt(process.env.PORT ?? '3001', 10)
 
 // ── Express app ───────────────────────────────────────────────────────────────
 
