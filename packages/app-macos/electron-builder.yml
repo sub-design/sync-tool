@@ -1,0 +1,38 @@
+appId: com.sync-tool.app
+productName: Sync Tool
+copyright: Copyright © 2026
+directories:
+  output: out
+# electron-builder automatically includes production node_modules;
+# we only need to list our compiled files + assets explicitly.
+files:
+  - dist/**/*
+  - assets/**/*
+  - package.json
+extraResources:
+  # Bundled agent (single JS file with all deps inlined via esbuild)
+  - from: ../agent/bundle
+    to: agent
+    filter:
+      - "*.js"
+mac:
+  category: public.app-category.productivity
+  icon: assets/icon.icns
+  # Personal/dev use — no code signing required.
+  # On first launch: System Settings → Privacy & Security → Open Anyway
+  identity: null
+  target:
+    - target: dmg
+      arch: universal   # Intel + Apple Silicon
+    - target: zip
+      arch: universal
+dmg:
+  title: "${productName} ${version}"
+  background: null
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

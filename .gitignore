@@ -7,6 +7,10 @@ dist/
 dist-ssr/
 bin/
 
+# macOS app packaging
+packages/app-macos/out/
+packages/agent/bundle/
+
 # Database files
 .data/
 *.db

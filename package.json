@@ -8,6 +8,7 @@
     "dev:relay": "pnpm --filter relay dev",
     "dev:web": "concurrently \"PORT=3101 pnpm --filter api dev\" \"pnpm --filter relay dev\" \"VITE_API_URL=http://127.0.0.1:3101/api VITE_WS_URL=ws://127.0.0.1:3101 pnpm --filter web dev\"",
     "build": "pnpm -r build",
+    "package:macos": "pnpm --filter agent bundle && pnpm --filter @sync-tool/app-macos dist:dmg",
     "test": "pnpm --filter agent test && pnpm build:engine",
     "build:engine": "cd packages/sync-engine-go && go test ./... && go build -o bin/sync-engine ./cmd/sync-engine"
   },
