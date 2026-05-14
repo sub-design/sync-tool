@@ -14,7 +14,7 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import SyncLogTable from '@/components/SyncLogTable'
+import SyncLogTable, { type SyncLogEntry } from '@/components/SyncLogTable'
 import JobForm from '@/components/JobForm'
 import { useWsStore, subscribe } from '@/lib/ws'
 import { formatRelative, formatBytes } from '@/lib/format'
@@ -64,9 +64,9 @@ export default function JobDetail() {
     enabled: !!id,
   })
 
-  const { data: logData } = useQuery({
+  const { data: logData } = useQuery<SyncLogEntry[]>({
     queryKey: ['log', id],
-    queryFn: () => api.getJobLog(id!, 50),
+    queryFn: () => api.getJobLog(id!, 50) as Promise<SyncLogEntry[]>,
     enabled: !!id,
   })
 
@@ -208,7 +208,7 @@ export default function JobDetail() {
             {/* Sync history */}
             <div className="space-y-2">
               <h3 className="text-sm font-medium text-muted-foreground">Sync history</h3>
-              <SyncLogTable entries={(logData as any[]) ?? []} jobId={id!} />
+              <SyncLogTable entries={logData ?? []} />
             </div>
 
             {/* Edit dialog */}

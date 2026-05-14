@@ -1,31 +1,45 @@
 import { useState } from 'react'
-import { Check, X } from 'lucide-react'
+import { CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatRelative, formatDuration, formatBytes } from '@/lib/format'
 
-interface LogEntry {
-  id: string
-  started_at: number
-  ended_at?: number
-  files_copied?: number
-  files_skipped?: number
-  bytes_transferred?: number
-  logical_bytes?: number
-  delta_bytes?: number
-  full_bytes?: number
-  delta_files?: number
-  full_files?: number
-  errors?: string
-  status: 'completed' | 'error' | string
+export interface SyncLogEntry {
+  id:               string
+  job_id:           string
+  status:           'completed' | 'error'
+  error_message:    string | null
+  started_at:       number
+  ended_at:         number | null
+  files_copied:     number
+  files_skipped:    number
+  files_errored:    number
+  bytes_transferred: number
+  logical_bytes:    number
+  errors:           string   // JSON array of per-file error strings
 }
 
 interface SyncLogTableProps {
-  entries: LogEntry[]
-  jobId: string
+  entries: SyncLogEntry[]
+}
+
+function StatusIcon({ entry }: { entry: SyncLogEntry }) {
+  if (entry.status === 'error') {
+    return <XCircle className="text-destructive" size={16} />
+  }
+  if (entry.files_errored > 0) {
+    return (
+      <Tooltip>
+        <TooltipTrigger>
+          <AlertCircle className="text-amber-500" size={16} />
+        </TooltipTrigger>
+        <TooltipContent>{entry.files_errored} file{entry.files_errored !== 1 ? 's' : ''} failed</TooltipContent>
+      </Tooltip>
+    )
+  }
+  return <CheckCircle2 className="text-green-600" size={16} />
 }
 
 export default function SyncLogTable({ entries }: SyncLogTableProps) {
@@ -39,11 +53,10 @@ export default function SyncLogTable({ entries }: SyncLogTableProps) {
     )
   }
 
-  function toggleRow(id: string) {
+  function toggle(id: string) {
     setExpanded(prev => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      if (next.has(id)) { next.delete(id) } else { next.add(id) }
       return next
     })
   }
@@ -52,70 +65,99 @@ export default function SyncLogTable({ entries }: SyncLogTableProps) {
     <Table>
       <TableHeader>
         <TableRow>
+          <TableHead className="w-6" />
           <TableHead>Started</TableHead>
           <TableHead>Duration</TableHead>
           <TableHead>Copied</TableHead>
           <TableHead>Skipped</TableHead>
           <TableHead>Size</TableHead>
-          <TableHead className="w-8">Status</TableHead>
+          <TableHead className="w-8" />
         </TableRow>
       </TableHeader>
       <TableBody>
         {entries.map(entry => {
-          const parsedErrors: string[] = (() => {
+          const fileErrors: string[] = (() => {
             try { return entry.errors ? JSON.parse(entry.errors) : [] } catch { return [] }
           })()
-          const hasErrors = parsedErrors.length > 0
-          const isExpanded = expanded.has(entry.id)
-          const duration = entry.ended_at ? entry.ended_at - entry.started_at : 0
-          const absoluteDate = new Date(entry.started_at).toLocaleString()
+
+          // Expandable if there's a fatal error message OR per-file errors
+          const expandContent = entry.error_message
+            ? [entry.error_message]
+            : fileErrors
+
+          const isExpandable = expandContent.length > 0
+          const isExpanded   = expanded.has(entry.id)
+          const duration     = entry.ended_at ? entry.ended_at - entry.started_at : null
 
           return [
             <TableRow
               key={entry.id}
-              className={hasErrors ? 'cursor-pointer' : undefined}
-              onClick={hasErrors ? () => toggleRow(entry.id) : undefined}
+              className={isExpandable ? 'cursor-pointer select-none' : undefined}
+              onClick={isExpandable ? () => toggle(entry.id) : undefined}
             >
+              {/* Expand chevron */}
+              <TableCell className="pr-0 text-muted-foreground">
+                {isExpandable
+                  ? (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />)
+                  : null}
+              </TableCell>
+
+              {/* Started */}
               <TableCell>
                 <Tooltip>
-                  <TooltipTrigger className="text-sm">
-                    {formatRelative(entry.started_at)}
-                  </TooltipTrigger>
-                  <TooltipContent>{absoluteDate}</TooltipContent>
-                </Tooltip>
-              </TableCell>
-              <TableCell className="text-sm">{formatDuration(duration)}</TableCell>
-              <TableCell className="text-sm">{entry.files_copied ?? 0}</TableCell>
-              <TableCell className="text-sm">{entry.files_skipped ?? 0}</TableCell>
-              <TableCell className="text-sm">
-                <Tooltip>
-                  <TooltipTrigger>
-                    {entry.bytes_transferred ? formatBytes(entry.bytes_transferred) : '—'}
+                  <TooltipTrigger asChild>
+                    <span className="text-sm cursor-default">
+                      {formatRelative(entry.started_at)}
+                    </span>
                   </TooltipTrigger>
                   <TooltipContent>
-                    {entry.logical_bytes
-                      ? `${formatBytes(entry.bytes_transferred ?? 0)} network / ${formatBytes(entry.logical_bytes)} logical`
-                      : 'Network bytes transferred'}
-                    {(entry.delta_files ?? 0) > 0 && ` · ${entry.delta_files} delta files`}
-                    {(entry.full_files ?? 0) > 0 && ` · ${entry.full_files} full files`}
+                    {new Date(entry.started_at).toLocaleString()}
                   </TooltipContent>
                 </Tooltip>
               </TableCell>
+
+              {/* Duration */}
+              <TableCell className="text-sm text-muted-foreground">
+                {duration != null ? formatDuration(duration) : '—'}
+              </TableCell>
+
+              {/* Copied */}
+              <TableCell className="text-sm">{entry.files_copied}</TableCell>
+
+              {/* Skipped */}
+              <TableCell className="text-sm text-muted-foreground">{entry.files_skipped}</TableCell>
+
+              {/* Size */}
+              <TableCell className="text-sm">
+                {entry.bytes_transferred > 0 ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="cursor-default">{formatBytes(entry.bytes_transferred)}</span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {entry.logical_bytes > 0
+                        ? `${formatBytes(entry.bytes_transferred)} network · ${formatBytes(entry.logical_bytes)} logical`
+                        : 'Network bytes transferred'}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </TableCell>
+
+              {/* Status icon */}
               <TableCell>
-                {entry.status === 'completed'
-                  ? <Check className="text-green-600" size={16} />
-                  : <X className="text-red-500" size={16} />}
+                <StatusIcon entry={entry} />
               </TableCell>
             </TableRow>,
 
+            /* Expandable error panel */
             isExpanded && (
-              <TableRow key={`${entry.id}-errors`}>
-                <TableCell colSpan={6} className="p-0">
-                  <ScrollArea className="max-h-[120px]">
-                    <pre className="bg-red-50 dark:bg-red-950 font-mono text-xs p-2 rounded">
-                      {parsedErrors.join('\n')}
-                    </pre>
-                  </ScrollArea>
+              <TableRow key={`${entry.id}-detail`} className="hover:bg-transparent">
+                <TableCell colSpan={7} className="pt-0 pb-2 px-4">
+                  <pre className="overflow-auto max-h-32 rounded-md bg-destructive/5 border border-destructive/20 px-3 py-2 font-mono text-xs text-destructive leading-relaxed whitespace-pre-wrap">
+                    {expandContent.join('\n')}
+                  </pre>
                 </TableCell>
               </TableRow>
             ),

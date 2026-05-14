@@ -179,6 +179,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: st
         const job  = await jobsDb.get(msg.jobId)
         const jUid = await jobsDb.getUserId(msg.jobId)
         await jobsDb.setStatus(msg.jobId, 'error', msg.error)
+        await logDb.fail(msg.jobId, msg.error)
         broadcastToBrowsers({ type: 'job:error', jobId: msg.jobId, error: msg.error }, jUid)
         void notifyJob(job, { status: 'error', jobId: msg.jobId, error: msg.error })
         console.error(`[api] Job ${msg.jobId} failed: ${msg.error}`)

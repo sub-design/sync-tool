@@ -59,6 +59,8 @@ export async function initDb(): Promise<void> {
     CREATE TABLE IF NOT EXISTS sync_log (
       id                BIGSERIAL PRIMARY KEY,
       job_id            TEXT   NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      status            TEXT   NOT NULL DEFAULT 'completed',
+      error_message     TEXT,
       started_at        BIGINT NOT NULL,
       ended_at          BIGINT,
       files_copied      INT    DEFAULT 0,
@@ -87,6 +89,8 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS full_bytes BIGINT DEFAULT 0`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS delta_files INT DEFAULT 0`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS full_files INT DEFAULT 0`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed'`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS error_message TEXT`,
   ]) {
     await sql.unsafe(stmt)
   }
@@ -254,6 +258,46 @@ export const jobsDb = {
 
 // ── Sync log ──────────────────────────────────────────────────────────────────
 
+export interface SyncLogEntry {
+  id:               string
+  job_id:           string
+  status:           'completed' | 'error'
+  error_message:    string | null
+  started_at:       number
+  ended_at:         number | null
+  files_copied:     number
+  files_skipped:    number
+  files_errored:    number
+  bytes_transferred: number
+  logical_bytes:    number
+  delta_bytes:      number
+  full_bytes:       number
+  delta_files:      number
+  full_files:       number
+  errors:           string
+}
+
+function rowToLogEntry(row: Record<string, unknown>): SyncLogEntry {
+  return {
+    id:               String(row.id),
+    job_id:           row.job_id as string,
+    status:           (row.status as string) === 'error' ? 'error' : 'completed',
+    error_message:    (row.error_message as string) ?? null,
+    started_at:       Number(row.started_at),
+    ended_at:         row.ended_at != null ? Number(row.ended_at) : null,
+    files_copied:     Number(row.files_copied ?? 0),
+    files_skipped:    Number(row.files_skipped ?? 0),
+    files_errored:    Number(row.files_errored ?? 0),
+    bytes_transferred: Number(row.bytes_transferred ?? 0),
+    logical_bytes:    Number(row.logical_bytes ?? 0),
+    delta_bytes:      Number(row.delta_bytes ?? 0),
+    full_bytes:       Number(row.full_bytes ?? 0),
+    delta_files:      Number(row.delta_files ?? 0),
+    full_files:       Number(row.full_files ?? 0),
+    errors:           (row.errors as string) ?? '[]',
+  }
+}
+
 export const logDb = {
   async create(jobId: string): Promise<number> {
     const [{ id }] = await sql<[{ id: string }]>`
@@ -265,6 +309,7 @@ export const logDb = {
   async complete(logId: number, result: SyncResult): Promise<void> {
     await sql`
       UPDATE sync_log SET
+        status            = 'completed',
         ended_at          = ${result.endedAt},
         files_copied      = ${result.filesCopied},
         files_skipped     = ${result.filesSkipped},
@@ -280,8 +325,19 @@ export const logDb = {
     `
   },
 
-  async list(jobId: string, limit = 20): Promise<unknown[]> {
-    const rows = await sql`SELECT * FROM sync_log WHERE job_id = ${jobId} ORDER BY started_at DESC LIMIT ${limit}`
-    return [...rows]
+  /** Record a fully-failed run (job:error — no files transferred). */
+  async fail(jobId: string, errorMessage: string): Promise<void> {
+    const now = Date.now()
+    await sql`
+      INSERT INTO sync_log (job_id, status, error_message, started_at, ended_at)
+      VALUES (${jobId}, 'error', ${errorMessage}, ${now}, ${now})
+    `
+  },
+
+  async list(jobId: string, limit = 20): Promise<SyncLogEntry[]> {
+    const rows = await sql`
+      SELECT * FROM sync_log WHERE job_id = ${jobId} ORDER BY started_at DESC LIMIT ${limit}
+    `
+    return rows.map(rowToLogEntry)
   },
 }
