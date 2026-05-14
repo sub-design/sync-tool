@@ -138,8 +138,10 @@ export default function JobDetail() {
                       Edit
                     </Button>
                     <DropdownMenu>
-                      <DropdownMenuTrigger render={<Button size="sm" variant="outline" />}>
-                        <MoreHorizontal size={14} />
+                      <DropdownMenuTrigger asChild>
+                        <Button size="sm" variant="outline">
+                          <MoreHorizontal size={14} />
+                        </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem
