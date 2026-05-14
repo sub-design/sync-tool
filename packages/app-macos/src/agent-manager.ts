@@ -28,7 +28,9 @@ interface AgentCommand { cmd: string; args: string[]; extraEnv?: Record<string, 
 function resolveAgentCommand(): AgentCommand {
   // 1. Bundled: Resources/agent/index.js — run using Electron's built-in Node.js runtime
   //    (ELECTRON_RUN_AS_NODE=1 makes the Electron binary behave as plain node)
-  const bundledJs = join(app.getAppPath(), '..', 'Resources', 'agent', 'index.js')
+  //    app.getAppPath() = .../Contents/Resources/app.asar
+  //    so '..' gives us .../Contents/Resources/
+  const bundledJs = join(app.getAppPath(), '..', 'agent', 'index.js')
   if (existsSync(bundledJs)) {
     return {
       cmd: process.execPath,
