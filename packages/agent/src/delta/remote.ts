@@ -980,7 +980,7 @@ async function writeFullPayload(session: TransferSession) {
   const target = resolveBackend(session.root)
   const targetPath = joinRemote(target.rootPath, session.relativePath)
   try {
-    await target.backend.write(targetPath, fs.createReadStream(session.tempPath), session.meta)
+    await target.backend.write(targetPath, fs.createReadStream(session.tempPath), session.meta, { atomic: true })
     if (session.expectedSHA256) {
       await assertTargetHash(target, targetPath, session.expectedSHA256)
     }

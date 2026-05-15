@@ -587,19 +587,21 @@ async function transferFile(
 
   throwIfAborted(signal)
   const resumeEnabled = Boolean(job?.reliability?.resumeEnabled) && !encrypted
-  const resumeOffset = resumeEnabled
-    ? await withRetry(() => dstBackend.partialSize?.(dstPath, { size: srcEntry.size, mtimeMs: srcEntry.mtimeMs }) ?? Promise.resolve(0), retryOptions, signal)
-    : 0
 
+  let resumeOffset = 0
   await withRetry(async () => {
     throwIfAborted(signal)
-    let stream = await srcBackend.read(srcEntry.absolutePath, resumeOffset > 0 ? { start: resumeOffset } : undefined)
+    const currentOffset = resumeEnabled
+      ? (await (dstBackend.partialSize?.(dstPath, { size: srcEntry.size, mtimeMs: srcEntry.mtimeMs }) ?? Promise.resolve(0)))
+      : 0
+    resumeOffset = currentOffset
+    let stream = await srcBackend.read(srcEntry.absolutePath, currentOffset > 0 ? { start: currentOffset } : undefined)
     stream = applyReliabilityTransforms(stream, job, signal)
     await dstBackend.write(
       dstPath,
       stream,
       { size: srcEntry.size, mtimeMs: srcEntry.mtimeMs, encrypted },
-      { atomic: true, resumeOffset, expectedSize: srcEntry.size },
+      { atomic: true, resumeOffset: currentOffset, expectedSize: srcEntry.size },
     )
   }, retryOptions, signal)
 

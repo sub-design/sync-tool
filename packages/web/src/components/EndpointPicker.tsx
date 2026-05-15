@@ -1,32 +1,39 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Eye, EyeOff, HardDrive, Lock, Network, Server, Terminal } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Eye, EyeOff, Folder, HardDrive, Lock, Network, Server, Terminal } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { BACKEND_DEFAULTS, type BackendType, type EndpointConfig } from '../types'
-import { buildBackendUrl, maskBackendPassword, parseBackendUrl } from '@/lib/backend'
+import { buildBackendUrl, parseBackendUrl } from '@/lib/backend'
 
 interface EndpointPickerProps {
-  label:    string
-  value:    string
+  label: string
+  value: string
   onChange: (url: string) => void
 }
 
 const BACKEND_OPTIONS = [
-  { type: 'local' as const, label: 'Local', Icon: HardDrive },
-  { type: 'sftp' as const, label: 'SFTP', Icon: Terminal },
-  { type: 'ftp' as const, label: 'FTP', Icon: Terminal },
-  { type: 'ftps' as const, label: 'FTPS', Icon: Lock },
-  { type: 'smb' as const, label: 'SMB', Icon: Network },
-  { type: 'nfs' as const, label: 'NFS', Icon: Server },
+  { type: 'local' as const, label: 'Local',  Icon: HardDrive },
+  { type: 'sftp'  as const, label: 'SFTP',   Icon: Terminal },
+  { type: 'ftp'   as const, label: 'FTP',    Icon: Terminal },
+  { type: 'ftps'  as const, label: 'FTPS',   Icon: Lock },
+  { type: 'smb'   as const, label: 'SMB',    Icon: Network },
+  { type: 'nfs'   as const, label: 'NFS',    Icon: Server },
 ]
 
 function withTypeDefaults(config: EndpointConfig, type: BackendType): EndpointConfig {
   return {
     ...config,
     type,
-    port: BACKEND_DEFAULTS[type].port ?? '',
+    port:     BACKEND_DEFAULTS[type].port ?? '',
     username: type === 'nfs' ? '' : config.username,
     password: type === 'nfs' ? '' : config.password,
   }
@@ -35,15 +42,19 @@ function withTypeDefaults(config: EndpointConfig, type: BackendType): EndpointCo
 export default function EndpointPicker({ label, value, onChange }: EndpointPickerProps) {
   const [config, setConfig] = useState(() => parseBackendUrl(value))
   const [showPassword, setShowPassword] = useState(false)
+  const [editingPath, setEditingPath] = useState(false)
+  const pathInputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const next = parseBackendUrl(value)
     if (buildBackendUrl(config) !== value) setConfig(next)
-    // Only respond to external value changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
 
-  const preview = useMemo(() => maskBackendPassword(buildBackendUrl(config)), [config])
+  useEffect(() => {
+    if (editingPath) pathInputRef.current?.focus()
+  }, [editingPath])
 
   const updateConfig = (patch: Partial<EndpointConfig>) => {
     setConfig(current => {
@@ -61,60 +72,152 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
     })
   }
 
-  const isRemote = config.type !== 'local'
-  const usesPort = config.type === 'sftp' || config.type === 'ftp' || config.type === 'ftps'
-  const usesCredentials = isRemote && config.type !== 'nfs'
+  const handleBrowse = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click()
+    }
+  }
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    // In Electron, file.path gives the real filesystem path
+    const filePath = (file as File & { path?: string }).path
+    if (filePath) {
+      const dir = filePath.substring(0, filePath.lastIndexOf('/')) || filePath
+      updateConfig({ localPath: dir })
+    } else {
+      setEditingPath(true)
+    }
+    e.target.value = ''
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    const item = e.dataTransfer.items[0]
+    if (item?.kind === 'file') {
+      const file = item.getAsFile() as (File & { path?: string }) | null
+      if (file?.path) {
+        updateConfig({ localPath: file.path })
+      } else {
+        setEditingPath(true)
+      }
+    }
+  }
+
+  const isRemote   = config.type !== 'local'
+  const usesPort   = config.type === 'sftp' || config.type === 'ftp' || config.type === 'ftps'
+  const usesCreds  = isRemote && config.type !== 'nfs'
+  const hasLocal   = !isRemote && !!config.localPath
+  const hasRemote  = isRemote && !!config.host
+  const currentOpt = BACKEND_OPTIONS.find(o => o.type === config.type)!
 
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-border p-3">
-      <Label>{label}</Label>
+    <div className="flex flex-col gap-3 h-full">
+      {/* Type selector */}
+      <Select value={config.type} onValueChange={val => setType(val as BackendType)}>
+        <SelectTrigger className="w-full">
+          <SelectValue>
+            <span className="flex items-center gap-2">
+              <currentOpt.Icon size={14} />
+              {currentOpt.label}
+            </span>
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {BACKEND_OPTIONS.map(({ type, label: optLabel, Icon }) => (
+            <SelectItem key={type} value={type}>
+              <span className="flex items-center gap-2">
+                <Icon size={14} />
+                {optLabel}
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
 
-      <div className="grid grid-cols-2 rounded-md border border-border overflow-hidden sm:grid-cols-6">
-        {BACKEND_OPTIONS.map(({ type, label: optionLabel, Icon }) => (
-          <Button
-            key={type}
-            type="button"
-            variant="ghost"
-            className={[
-              'rounded-none w-full gap-1.5 border-border text-xs sm:text-sm',
-              'not-last:border-r sm:not-last:border-r',
-              config.type === type ? 'bg-secondary font-medium' : '',
-            ].join(' ')}
-            onClick={() => setType(type)}
-          >
-            <Icon size={16} />
-            {optionLabel}
-          </Button>
-        ))}
-      </div>
+      {/* Local: folder picker */}
+      {!isRemote && (
+        <>
+          <input
+            ref={fileInputRef}
+            type="file"
+            // @ts-expect-error webkitdirectory is non-standard
+            webkitdirectory=""
+            className="hidden"
+            onChange={handleFileInputChange}
+          />
 
-      {config.type === 'local' ? (
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${label}-local-path`}>Local path</Label>
-          <div className="relative">
-            <HardDrive className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              id={`${label}-local-path`}
-              className="pl-9 font-mono text-sm"
-              placeholder="/Users/alex/Documents"
-              value={config.localPath}
-              onChange={event => updateConfig({ localPath: event.target.value })}
-            />
-          </div>
-        </div>
-      ) : (
+          {hasLocal && !editingPath ? (
+            /* Compact selected state */
+            <div
+              className="flex items-center gap-2 rounded-md border border-border p-3 cursor-pointer hover:bg-accent transition-colors"
+              onClick={() => setEditingPath(true)}
+            >
+              <Folder size={16} className="text-muted-foreground shrink-0" />
+              <span className="font-mono text-sm truncate flex-1 text-left">{config.localPath}</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="shrink-0"
+                onClick={e => { e.stopPropagation(); setEditingPath(true) }}
+              >
+                Change
+              </Button>
+            </div>
+          ) : editingPath ? (
+            /* Path input */
+            <div className="flex gap-2">
+              <Input
+                ref={pathInputRef}
+                className="font-mono text-sm"
+                placeholder="/Users/alex/Documents"
+                value={config.localPath}
+                onChange={e => updateConfig({ localPath: e.target.value })}
+                onKeyDown={e => { if (e.key === 'Enter') setEditingPath(false) }}
+              />
+              <Button type="button" variant="outline" onClick={() => setEditingPath(false)}>
+                Done
+              </Button>
+            </div>
+          ) : (
+            /* Empty placeholder */
+            <div
+              className="flex-1 flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed border-border p-8 min-h-[220px]"
+              onDragOver={e => e.preventDefault()}
+              onDrop={handleDrop}
+            >
+              <div className="relative">
+                <Folder size={56} className="text-muted-foreground/25" strokeWidth={1.2} />
+                <span className="absolute inset-0 flex items-end justify-center pb-2 text-muted-foreground/40 font-bold text-xl">?</span>
+              </div>
+              <p className="font-semibold text-sm text-center">{label}</p>
+              <Button type="button" onClick={handleBrowse}>
+                Browse Folders
+              </Button>
+              <div className="flex flex-col items-center gap-0.5 text-xs text-muted-foreground">
+                <span>or</span>
+                <span>Drag and drop a folder here</span>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Remote: connection fields */}
+      {isRemote && (
         <div className="flex flex-col gap-3">
-          <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+          <div className="grid gap-3 grid-cols-[1fr_auto]">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor={`${label}-host`}>Host</Label>
               <Input
                 id={`${label}-host`}
                 placeholder="nas.local"
                 value={config.host}
-                onChange={event => updateConfig({ host: event.target.value })}
+                onChange={e => updateConfig({ host: e.target.value })}
               />
             </div>
-
             {usesPort && (
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor={`${label}-port`}>Port</Label>
@@ -122,23 +225,22 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
                   id={`${label}-port`}
                   className="w-20"
                   value={config.port}
-                  onChange={event => updateConfig({ port: event.target.value })}
+                  onChange={e => updateConfig({ port: e.target.value })}
                 />
               </div>
             )}
           </div>
 
-          {usesCredentials && (
-            <div className="grid gap-3 sm:grid-cols-2">
+          {usesCreds && (
+            <div className="grid gap-3 grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor={`${label}-username`}>Username</Label>
                 <Input
                   id={`${label}-username`}
                   value={config.username}
-                  onChange={event => updateConfig({ username: event.target.value })}
+                  onChange={e => updateConfig({ username: e.target.value })}
                 />
               </div>
-
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor={`${label}-password`}>Password</Label>
                 <div className="relative">
@@ -147,14 +249,14 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
                     type={showPassword ? 'text' : 'password'}
                     className="pr-10"
                     value={config.password}
-                    onChange={event => updateConfig({ password: event.target.value })}
+                    onChange={e => updateConfig({ password: e.target.value })}
                   />
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon"
                     className="absolute right-1 top-1/2 size-8 -translate-y-1/2"
-                    onClick={() => setShowPassword(current => !current)}
+                    onClick={() => setShowPassword(v => !v)}
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
                   >
                     {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -171,7 +273,7 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
                 id={`${label}-share`}
                 placeholder="backup"
                 value={config.share}
-                onChange={event => updateConfig({ share: event.target.value })}
+                onChange={e => updateConfig({ share: e.target.value })}
               />
             </div>
           )}
@@ -185,15 +287,11 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
               className="font-mono text-sm"
               placeholder={config.type === 'nfs' ? '/export/data' : '/home/alex/backup'}
               value={config.remotePath}
-              onChange={event => updateConfig({ remotePath: event.target.value })}
+              onChange={e => updateConfig({ remotePath: e.target.value })}
             />
           </div>
         </div>
       )}
-
-      <p className="font-mono text-xs text-muted-foreground mt-2 break-all">
-        {preview}
-      </p>
     </div>
   )
 }

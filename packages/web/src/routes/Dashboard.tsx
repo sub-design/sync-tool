@@ -37,7 +37,7 @@ export default function Dashboard() {
           New job
         </Button>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent>
+          <DialogContent className="sm:max-w-3xl">
             <DialogTitle>New job</DialogTitle>
             <JobForm
               onSuccess={() => {
