@@ -12,6 +12,7 @@
     "@sync-tool/shared": "workspace:*",
     "basic-ftp": "^6.0.1",
     "chokidar": "3.6.0",
+    "node-datachannel": "^0.32.3",
     "p-limit": "3.1.0",
     "p-retry": "4.6.2",
     "ssh2-sftp-client": "^12.1.1",

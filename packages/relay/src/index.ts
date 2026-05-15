@@ -18,7 +18,8 @@ import http from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { AgentToRelay, RelayToAgent, RelayDevice } from '@sync-tool/shared'
 
-const PORT = parseInt(process.env.PORT ?? '3002')
+const PORT         = parseInt(process.env.PORT ?? '3002')
+const RELAY_SECRET = process.env.RELAY_SECRET  // if set, agents must pass this token
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
@@ -77,6 +78,13 @@ wss.on('connection', (ws, req) => {
 
     switch (msg.type) {
       case 'relay:register': {
+        if (RELAY_SECRET && msg.token !== RELAY_SECRET) {
+          ws.send(JSON.stringify({ type: 'relay:error', message: 'Unauthorized' } satisfies RelayToAgent))
+          ws.close(1008, 'Unauthorized')
+          console.warn(`[relay] Rejected unauthorized connection from ${remoteIp}`)
+          return
+        }
+
         deviceId = msg.deviceId
 
         const device: DeviceConn = {
@@ -126,6 +134,19 @@ wss.on('connection', (ws, req) => {
 
         if (!delivered) {
           console.warn(`[relay] Device ${msg.to} not found or offline, dropped message from ${deviceId}`)
+        }
+        break
+      }
+
+      case 'relay:signal': {
+        // Route WebRTC signaling (SDP offer/answer + ICE candidates) for hole-punch
+        const delivered = sendToDevice(msg.to, {
+          type:   'relay:signal',
+          from:   deviceId,
+          signal: msg.signal,
+        })
+        if (!delivered) {
+          console.warn(`[relay] Signal target ${msg.to} offline, dropped from ${deviceId}`)
         }
         break
       }

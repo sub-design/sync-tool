@@ -2,9 +2,10 @@
 //  Core domain types
 // ─────────────────────────────────────────────
 
-export type JobDirection = 'ltr' | 'rtl' | 'bidir'
-export type JobStatus    = 'idle' | 'queued' | 'running' | 'completed' | 'cancelled' | 'error'
-export type TransferMode = 'full' | 'delta' | 'auto'
+export type JobDirection      = 'ltr' | 'rtl' | 'bidir'
+export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'cancelled' | 'error'
+export type TransferMode     = 'full' | 'delta' | 'auto'
+export type ConflictStrategy = 'newer-wins' | 'skip' | 'manual'
 
 export interface JobReliability {
   encryptionEnabled?: boolean
@@ -25,6 +26,7 @@ export interface Job {
   destination: string
   direction:   JobDirection
   transferMode?: TransferMode
+  conflictStrategy?: ConflictStrategy
   reliability?: JobReliability
   sourceDeviceId?: string
   destinationDeviceId?: string
@@ -44,6 +46,7 @@ export interface SyncResult {
   filesCopied:      number
   filesSkipped:     number
   filesErrored:     number
+  conflictsPending?: number
   bytesTransferred: number
   logicalBytes?:    number
   deltaBytes?:      number
@@ -111,12 +114,20 @@ export interface RelayDevice {
   lastSeen:  number
 }
 
+// SDP/ICE signal exchanged via relay for WebRTC hole-punch negotiation
+export type RTCSignal =
+  | { kind: 'offer' | 'answer'; sdp: string }
+  | { kind: 'ice'; candidate: string; mid: string }
+
 export type AgentToRelay =
-  | { type: 'relay:register'; deviceId: string; name: string; hostname: string; platform: string }
+  | { type: 'relay:register'; deviceId: string; name: string; hostname: string; platform: string; token?: string }
   | { type: 'relay:data';     to: string; payload: string }   // payload = base64 tunnel data
+  | { type: 'relay:signal';   to: string; signal: RTCSignal } // WebRTC signaling
 
 export type RelayToAgent =
   | { type: 'relay:registered'; ok: true }
+  | { type: 'relay:error';      message: string }
   | { type: 'relay:data';       from: string; payload: string }
+  | { type: 'relay:signal';     from: string; signal: RTCSignal }
   | { type: 'relay:peer:online';  deviceId: string; name: string }
   | { type: 'relay:peer:offline'; deviceId: string }

@@ -1,9 +1,19 @@
 import os from 'os'
 import { WebSocket } from 'ws'
 import type { AgentToRelay, RelayToAgent } from '@sync-tool/shared'
+import { P2pManager } from './p2pManager'
 
 const REQUEST_TIMEOUT_MS = 120_000
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024
+
+const RECONNECT_BASE_MS = 1_000
+const RECONNECT_MAX_MS = 30_000
+
+function backoffDelay(attempt: number): number {
+  const delay = RECONNECT_BASE_MS * 2 ** Math.min(attempt, 10)
+  const capped = Math.min(delay, RECONNECT_MAX_MS)
+  return Math.round(capped * (0.75 + Math.random() * 0.5))
+}
 
 export interface RelayEnvelope {
   id: string
@@ -21,11 +31,20 @@ export class RelayClient {
   private pending = new Map<string, { resolve: (value: any) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>()
   private handler?: RequestHandler
   private connected = false
+  private fatalError = false  // set on relay:error to stop reconnecting
+  private reconnectAttempt = 0
+  private readonly p2p: P2pManager
 
   constructor(
     private readonly relayUrl: string,
     private readonly deviceId: string,
-  ) {}
+    private readonly token?: string,
+  ) {
+    this.p2p = new P2pManager(deviceId, (to, signal) => {
+      this.sendRaw({ type: 'relay:signal', to, signal })
+    })
+    this.p2p.onData((from, payload) => void this.handleData(from, payload))
+  }
 
   start() {
     this.connect()
@@ -72,13 +91,13 @@ export class RelayClient {
     this.ws = new WebSocket(this.relayUrl)
 
     this.ws.on('open', () => {
-      this.connected = true
       this.sendRaw({
         type:     'relay:register',
         deviceId: this.deviceId,
         name:     os.hostname(),
         hostname: os.hostname(),
         platform: process.platform,
+        ...(this.token ? { token: this.token } : {}),
       })
       console.log(`[agent] Relay connected: ${this.relayUrl}`)
     })
@@ -86,14 +105,50 @@ export class RelayClient {
     this.ws.on('message', (raw) => {
       let msg: RelayToAgent
       try { msg = JSON.parse(raw.toString()) } catch { return }
+
+      if (msg.type === 'relay:registered') {
+        this.connected = true
+        this.reconnectAttempt = 0
+        console.log('[agent] Relay registered ✓')
+        return
+      }
+
+      if (msg.type === 'relay:error') {
+        console.error(`[agent] Relay rejected connection: ${msg.message}`)
+        this.fatalError = true
+        this.ws?.close()
+        return
+      }
+
+      if (msg.type === 'relay:peer:online') {
+        this.p2p.onPeerOnline(msg.deviceId)
+        return
+      }
+
+      if (msg.type === 'relay:peer:offline') {
+        this.p2p.onPeerOffline(msg.deviceId)
+        return
+      }
+
+      if (msg.type === 'relay:signal') {
+        this.p2p.onSignal(msg.from, msg.signal)
+        return
+      }
+
       if (msg.type !== 'relay:data') return
       void this.handleData(msg.from, msg.payload)
     })
 
     this.ws.on('close', () => {
       this.connected = false
-      console.log('[agent] Relay disconnected. Reconnecting in 5s...')
-      setTimeout(() => this.connect(), 5_000)
+      if (this.fatalError) {
+        this.p2p.closeAll()
+        console.error('[agent] Relay connection permanently closed due to error.')
+        return
+      }
+      const delay = backoffDelay(this.reconnectAttempt++)
+      console.log(`[agent] Relay disconnected. Reconnecting in ${delay}ms (attempt ${this.reconnectAttempt})...`)
+      setTimeout(() => this.connect(), delay)
     })
 
     this.ws.on('error', (err) => {
@@ -137,11 +192,11 @@ export class RelayClient {
   }
 
   private send(to: string, envelope: RelayEnvelope) {
-    this.sendRaw({
-      type:    'relay:data',
-      to,
-      payload: Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64'),
-    })
+    const payload = Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64')
+    // Try direct P2P first; fall back to relay if not yet established
+    if (!this.p2p.send(to, payload)) {
+      this.sendRaw({ type: 'relay:data', to, payload })
+    }
   }
 
   private sendRaw(msg: AgentToRelay) {
