@@ -43,6 +43,7 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
   const [config, setConfig] = useState(() => parseBackendUrl(value))
   const [showPassword, setShowPassword] = useState(false)
   const [editingPath, setEditingPath] = useState(false)
+  const [isDragOver, setIsDragOver] = useState(false)
   const pathInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -92,17 +93,39 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
     e.target.value = ''
   }
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    // Only clear if leaving the drop zone entirely (not entering a child)
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsDragOver(false)
+    }
+  }
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
-    const item = e.dataTransfer.items[0]
-    if (item?.kind === 'file') {
-      const file = item.getAsFile() as (File & { path?: string }) | null
-      if (file?.path) {
-        updateConfig({ localPath: file.path })
-      } else {
-        setEditingPath(true)
-      }
+    e.stopPropagation()
+    setIsDragOver(false)
+
+    // Electron: files[0].path gives the real filesystem path for dragged folders
+    const file = e.dataTransfer.files[0] as (File & { path?: string }) | undefined
+    if (file?.path) {
+      // In Electron, a dragged folder's path is the folder itself
+      updateConfig({ localPath: file.path })
+      return
     }
+
+    // Browser fallback: webkitGetAsEntry gives at least the folder name
+    const entry = e.dataTransfer.items[0]?.webkitGetAsEntry()
+    if (entry?.isDirectory) {
+      updateConfig({ localPath: entry.name })
+    }
+    setEditingPath(true)
   }
 
   const isRemote   = config.type !== 'local'
@@ -183,8 +206,15 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
           ) : (
             /* Empty placeholder */
             <div
-              className="flex-1 flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed border-border p-8 min-h-[220px]"
-              onDragOver={e => e.preventDefault()}
+              className={[
+                'flex-1 flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-8 min-h-[280px] transition-colors',
+                isDragOver
+                  ? 'border-primary bg-primary/5'
+                  : 'border-border',
+              ].join(' ')}
+              onDragOver={handleDragOver}
+              onDragEnter={handleDragOver}
+              onDragLeave={handleDragLeave}
               onDrop={handleDrop}
             >
               <div className="relative">
