@@ -15,8 +15,8 @@ export function openReleasePage(): void {
   shell.openExternal(url)
 }
 
-export function checkForUpdates(): void {
-  autoUpdater.checkForUpdates().catch(() => { /* silent */ })
+export function checkForUpdates(): Promise<import('electron-updater').UpdateCheckResult | null> {
+  return autoUpdater.checkForUpdates()
 }
 
 export function setupAutoUpdater(onAvailable: () => void): void {

@@ -1,4 +1,4 @@
-import { Tray, Menu, MenuItem, nativeImage, shell, app } from 'electron'
+import { Tray, Menu, MenuItem, nativeImage, shell, app, Notification } from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { connectionState, jobs } from './ws-client'
@@ -50,6 +50,8 @@ function buildContextMenu(): Menu {
   const items: MenuItem[] = []
 
   // ── Status header ──────────────────────────────────────────────────────────
+  items.push(new MenuItem({ label: `Sync Tool v${app.getVersion()}`, enabled: false }))
+
   const statusLabel =
     conn === 'connected'    ? '● Connected'    :
     conn === 'connecting'   ? '◌ Connecting…'  :
@@ -123,7 +125,27 @@ function buildContextMenu(): Menu {
   } else {
     items.push(new MenuItem({
       label: 'Check for Updates',
-      click: () => { checkForUpdates(); rebuild() },
+      click: () => {
+        checkForUpdates()
+          .then((result) => {
+            if (!result?.updateInfo) {
+              if (Notification.isSupported()) {
+                new Notification({
+                  title: 'Sync Tool',
+                  body: 'You are on the latest version.',
+                }).show()
+              }
+            }
+          })
+          .catch(() => {
+            if (Notification.isSupported()) {
+              new Notification({
+                title: 'Sync Tool',
+                body: 'Could not check for updates. Check your internet connection.',
+              }).show()
+            }
+          })
+      },
     }))
   }
 
@@ -135,7 +157,7 @@ function buildContextMenu(): Menu {
     accelerator: 'Cmd+,',
     click: () => openPreferences?.(),
   }))
-  items.push(new MenuItem({ label: 'Quit Sync Tool', accelerator: 'Cmd+Q', click: () => app.quit() }))
+  items.push(new MenuItem({ label: `Quit Sync Tool`, accelerator: 'Cmd+Q', click: () => app.quit() }))
 
   return Menu.buildFromTemplate(items)
 }
