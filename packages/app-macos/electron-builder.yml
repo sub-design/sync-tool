@@ -3,6 +3,7 @@ publish:
   provider: github
   owner: sub-design
   repo: sync-tool
+  releaseType: release
 productName: Sync Tool
 copyright: Copyright © 2026
 directories:
