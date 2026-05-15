@@ -39,12 +39,18 @@ function withTypeDefaults(config: EndpointConfig, type: BackendType): EndpointCo
   }
 }
 
+function parseFolderPath(p: string): { name: string; breadcrumbs: string } {
+  const sep = p.includes('\\') ? '\\' : '/'
+  const parts = p.split(sep).filter(Boolean)
+  const name = parts[parts.length - 1] ?? p
+  const crumbs = parts.slice(0, -1).join(` > `)
+  return { name, breadcrumbs: crumbs || sep }
+}
+
 export default function EndpointPicker({ label, value, onChange }: EndpointPickerProps) {
   const [config, setConfig] = useState(() => parseBackendUrl(value))
   const [showPassword, setShowPassword] = useState(false)
-  const [editingPath, setEditingPath] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
-  const pathInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -52,10 +58,6 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
     if (buildBackendUrl(config) !== value) setConfig(next)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
-
-  useEffect(() => {
-    if (editingPath) pathInputRef.current?.focus()
-  }, [editingPath])
 
   const updateConfig = (patch: Partial<EndpointConfig>) => {
     setConfig(current => {
@@ -73,22 +75,19 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
     })
   }
 
-  const handleBrowse = () => {
-    if (fileInputRef.current) {
-      fileInputRef.current.click()
-    }
-  }
+  const handleBrowse = () => fileInputRef.current?.click()
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    // In Electron, file.path gives the real filesystem path
     const filePath = (file as File & { path?: string }).path
     if (filePath) {
-      const dir = filePath.substring(0, filePath.lastIndexOf('/')) || filePath
-      updateConfig({ localPath: dir })
-    } else {
-      setEditingPath(true)
+      // Electron: strip the filename to get the folder path
+      const sep = filePath.includes('\\') ? '\\' : '/'
+      const parts = filePath.split(sep).filter(Boolean)
+      parts.pop() // remove file name, keep directory
+      const dir = (filePath.startsWith(sep) ? sep : '') + parts.join(sep)
+      updateConfig({ localPath: dir || filePath })
     }
     e.target.value = ''
   }
@@ -101,7 +100,6 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault()
-    // Only clear if leaving the drop zone entirely (not entering a child)
     if (!e.currentTarget.contains(e.relatedTarget as Node)) {
       setIsDragOver(false)
     }
@@ -112,26 +110,24 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
     e.stopPropagation()
     setIsDragOver(false)
 
-    // Electron: files[0].path gives the real filesystem path for dragged folders
+    // Electron: dragged folder exposes real path via files[0].path
     const file = e.dataTransfer.files[0] as (File & { path?: string }) | undefined
     if (file?.path) {
-      // In Electron, a dragged folder's path is the folder itself
       updateConfig({ localPath: file.path })
       return
     }
 
-    // Browser fallback: webkitGetAsEntry gives at least the folder name
+    // Browser fallback: use directory name from entry
     const entry = e.dataTransfer.items[0]?.webkitGetAsEntry()
     if (entry?.isDirectory) {
       updateConfig({ localPath: entry.name })
     }
-    setEditingPath(true)
   }
 
-  const isRemote   = config.type !== 'local'
-  const usesPort   = config.type === 'sftp' || config.type === 'ftp' || config.type === 'ftps'
-  const usesCreds  = isRemote && config.type !== 'nfs'
-  const hasLocal   = !isRemote && !!config.localPath
+  const isRemote  = config.type !== 'local'
+  const usesPort  = config.type === 'sftp' || config.type === 'ftp' || config.type === 'ftps'
+  const usesCreds = isRemote && config.type !== 'nfs'
+  const hasLocal  = !isRemote && !!config.localPath
   const currentOpt = BACKEND_OPTIONS.find(o => o.type === config.type)!
 
   return (
@@ -170,47 +166,23 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
             onChange={handleFileInputChange}
           />
 
-          {hasLocal && !editingPath ? (
-            /* Compact selected state */
-            <div
-              className="flex items-center gap-2 rounded-md border border-border p-3 cursor-pointer hover:bg-accent transition-colors"
-              onClick={() => setEditingPath(true)}
-            >
-              <Folder size={16} className="text-muted-foreground shrink-0" />
-              <span className="font-mono text-sm truncate flex-1 text-left">{config.localPath}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="shrink-0"
-                onClick={e => { e.stopPropagation(); setEditingPath(true) }}
-              >
-                Change
-              </Button>
-            </div>
-          ) : editingPath ? (
-            /* Path input */
-            <div className="flex gap-2">
-              <Input
-                ref={pathInputRef}
-                className="font-mono text-sm"
-                placeholder="/Users/alex/Documents"
-                value={config.localPath}
-                onChange={e => updateConfig({ localPath: e.target.value })}
-                onKeyDown={e => { if (e.key === 'Enter') setEditingPath(false) }}
-              />
-              <Button type="button" variant="outline" onClick={() => setEditingPath(false)}>
-                Done
-              </Button>
-            </div>
+          {hasLocal ? (
+            /* Selected state */
+            <SelectedFolderPanel
+              path={config.localPath}
+              onChangeRequest={handleBrowse}
+              onDragOver={handleDragOver}
+              onDragEnter={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              isDragOver={isDragOver}
+            />
           ) : (
             /* Empty placeholder */
             <div
               className={[
-                'flex-1 flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-8 min-h-[280px] transition-colors',
-                isDragOver
-                  ? 'border-primary bg-primary/5'
-                  : 'border-border',
+                'flex-1 flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-8 min-h-[280px] transition-colors',
+                isDragOver ? 'border-primary bg-primary/5' : 'border-border',
               ].join(' ')}
               onDragOver={handleDragOver}
               onDragEnter={handleDragOver}
@@ -218,10 +190,10 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
               onDrop={handleDrop}
             >
               <div className="relative">
-                <Folder size={56} className="text-muted-foreground/25" strokeWidth={1.2} />
-                <span className="absolute inset-0 flex items-end justify-center pb-2 text-muted-foreground/40 font-bold text-xl">?</span>
+                <Folder size={64} className="text-muted-foreground/20" strokeWidth={1} />
+                <span className="absolute inset-0 flex items-end justify-center pb-2.5 text-muted-foreground/35 font-bold text-2xl">?</span>
               </div>
-              <p className="font-semibold text-sm text-center">{label}</p>
+              <p className="font-semibold text-sm text-center text-foreground">{label}</p>
               <Button type="button" onClick={handleBrowse}>
                 Browse Folders
               </Button>
@@ -321,6 +293,62 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+interface SelectedFolderPanelProps {
+  path: string
+  onChangeRequest: () => void
+  onDragOver: (e: React.DragEvent) => void
+  onDragEnter: (e: React.DragEvent) => void
+  onDragLeave: (e: React.DragEvent) => void
+  onDrop: (e: React.DragEvent) => void
+  isDragOver: boolean
+}
+
+function SelectedFolderPanel({
+  path,
+  onChangeRequest,
+  onDragOver,
+  onDragEnter,
+  onDragLeave,
+  onDrop,
+  isDragOver,
+}: SelectedFolderPanelProps) {
+  const { name, breadcrumbs } = parseFolderPath(path)
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className={[
+        'flex-1 flex flex-col items-center justify-center gap-3 rounded-xl border-2 p-8 min-h-[280px] cursor-pointer transition-colors group',
+        isDragOver
+          ? 'border-primary bg-primary/5'
+          : 'border-border hover:border-border/80 hover:bg-accent/40',
+      ].join(' ')}
+      onClick={onChangeRequest}
+      onKeyDown={e => e.key === 'Enter' && onChangeRequest()}
+      onDragOver={onDragOver}
+      onDragEnter={onDragEnter}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      <Folder size={64} className="text-muted-foreground/50" strokeWidth={1} fill="currentColor" />
+
+      <div className="flex flex-col items-center gap-1 text-center">
+        <p className="font-semibold text-base text-foreground">{name}</p>
+        {breadcrumbs && (
+          <p className="text-xs text-muted-foreground max-w-[180px] leading-relaxed">
+            {breadcrumbs}
+          </p>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
+        Click to change folder
+      </p>
     </div>
   )
 }
