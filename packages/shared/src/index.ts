@@ -6,6 +6,7 @@ export type JobDirection      = 'ltr' | 'rtl' | 'bidir'
 export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'cancelled' | 'error'
 export type TransferMode     = 'full' | 'delta' | 'auto'
 export type ConflictStrategy = 'newer-wins' | 'skip' | 'manual'
+export type DeletionPolicy   = 'backup' | 'backup-with-deletes' | 'mirror'
 
 export interface JobReliability {
   encryptionEnabled?: boolean
@@ -27,6 +28,7 @@ export interface Job {
   direction:   JobDirection
   transferMode?: TransferMode
   conflictStrategy?: ConflictStrategy
+  deletionPolicy?: DeletionPolicy
   reliability?: JobReliability
   sourceDeviceId?: string
   destinationDeviceId?: string
@@ -39,11 +41,42 @@ export interface Job {
   updatedAt:   number
 }
 
+export type RollbackFileAction = 'overwritten' | 'deleted' | 'created'
+export type RollbackSide       = 'dst' | 'src'
+
+export interface RollbackFileEntry {
+  relativePath:  string
+  side:          RollbackSide
+  action:        RollbackFileAction
+  backupPath:    string        // absolute local path on agent disk; '' when action === 'created'
+  prevSize:      number | null
+  prevMtimeMs:   number | null
+  prevChecksum:  string | null
+}
+
+export interface RollbackManifest {
+  jobId:     string
+  backupId:  string    // UUID directory name under ~/.synctool/rollback/{jobId}/
+  createdAt: number
+  entries:   RollbackFileEntry[]
+}
+
+export interface RollbackResult {
+  jobId:          string
+  startedAt:      number
+  endedAt:        number
+  filesRestored:  number
+  filesDeleted:   number
+  filesErrored:   number
+  errors:         string[]
+}
+
 export interface SyncResult {
   jobId:            string
   startedAt:        number
   endedAt:          number
   filesCopied:      number
+  filesDeleted?:    number
   filesSkipped:     number
   filesErrored:     number
   conflictsPending?: number
@@ -54,6 +87,7 @@ export interface SyncResult {
   deltaFiles?:      number
   fullFiles?:       number
   errors:           string[]
+  rollbackManifest?: RollbackManifest
 }
 
 export interface SyncProgress {
@@ -86,6 +120,9 @@ export type AgentToServer =
   | { type: 'job:cancelled'; jobId: string }
   | { type: 'job:error';     jobId: string; error: string }
   | { type: 'browse:result'; requestId: string; path: string; entries: DirEntry[]; error?: string }
+  | { type: 'job:rollback:progress'; jobId: string; filesRestored: number; filesTotal: number; currentFile: string }
+  | { type: 'job:rollback:complete'; jobId: string; result: RollbackResult }
+  | { type: 'job:rollback:error';    jobId: string; error: string }
 
 export type ServerToAgent =
   | { type: 'registered';      ok: true }
@@ -93,6 +130,7 @@ export type ServerToAgent =
   | { type: 'job:run';         job: Job }
   | { type: 'job:cancel';      jobId: string }
   | { type: 'browse:request';  requestId: string; path: string }
+  | { type: 'job:rollback';    job: Job; logId: string; manifest: RollbackManifest }
 
 // ─────────────────────────────────────────────
 //  WebSocket protocol: Browser ↔ API Server
@@ -107,6 +145,9 @@ export type ServerToBrowser =
   | { type: 'job:complete';   result: SyncResult }
   | { type: 'job:cancelled';  jobId: string }
   | { type: 'job:error';      jobId: string; error: string }
+  | { type: 'job:rollback:progress'; jobId: string; filesRestored: number; filesTotal: number; currentFile: string }
+  | { type: 'job:rollback:complete'; jobId: string; logId: string; result: RollbackResult }
+  | { type: 'job:rollback:error';    jobId: string; logId: string; error: string }
 
 // ─────────────────────────────────────────────
 //  Phase A: Connect / Relay protocol

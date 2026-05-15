@@ -10,6 +10,7 @@ export type JobDirection      = 'ltr' | 'rtl' | 'bidir'
 export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'cancelled' | 'error'
 export type TransferMode     = 'full' | 'delta' | 'auto'
 export type ConflictStrategy = 'newer-wins' | 'skip' | 'manual'
+export type DeletionPolicy   = 'backup' | 'backup-with-deletes' | 'mirror'
 export type BackendType  = 'local' | 'sftp' | 'ftp' | 'ftps' | 'smb' | 'nfs'
 
 export interface EndpointConfig {
@@ -48,6 +49,7 @@ export interface Job {
   id: string; name: string; source: string; destination: string
   direction: JobDirection; transferMode?: TransferMode
   conflictStrategy?: ConflictStrategy
+  deletionPolicy?: DeletionPolicy
   reliability?: JobReliability
   sourceDeviceId?: string; destinationDeviceId?: string
   watch?: boolean
@@ -62,11 +64,17 @@ export interface SyncProgress {
 
 export interface SyncResult {
   jobId: string; startedAt: number; endedAt: number
-  filesCopied: number; filesSkipped: number; filesErrored: number
+  filesCopied: number; filesDeleted?: number; filesSkipped: number; filesErrored: number
   conflictsPending?: number
   bytesTransferred: number
   logicalBytes?: number; deltaBytes?: number; fullBytes?: number
   deltaFiles?: number; fullFiles?: number
+  errors: string[]
+}
+
+export interface RollbackResult {
+  jobId: string; startedAt: number; endedAt: number
+  filesRestored: number; filesDeleted: number; filesErrored: number
   errors: string[]
 }
 
@@ -78,3 +86,6 @@ export type ServerToBrowser =
   | { type: 'job:complete';  result: SyncResult }
   | { type: 'job:cancelled'; jobId: string }
   | { type: 'job:error';     jobId: string; error: string }
+  | { type: 'job:rollback:progress'; jobId: string; filesRestored: number; filesTotal: number; currentFile: string }
+  | { type: 'job:rollback:complete'; jobId: string; result: RollbackResult }
+  | { type: 'job:rollback:error';    jobId: string; error: string }

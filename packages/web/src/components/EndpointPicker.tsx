@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Eye, EyeOff, Folder, HardDrive, Lock, Network, Server, Terminal, Monitor } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -57,7 +57,6 @@ export default function EndpointPicker({ label, value, onChange, deviceId, onDev
   const [showPassword, setShowPassword] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const next = parseBackendUrl(value)
@@ -79,23 +78,6 @@ export default function EndpointPicker({ label, value, onChange, deviceId, onDev
       onChange(buildBackendUrl(next))
       return next
     })
-  }
-
-  const handleBrowse = () => fileInputRef.current?.click()
-
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const filePath = (file as File & { path?: string }).path
-    if (filePath) {
-      // Electron: strip the filename to get the folder path
-      const sep = filePath.includes('\\') ? '\\' : '/'
-      const parts = filePath.split(sep).filter(Boolean)
-      parts.pop() // remove file name, keep directory
-      const dir = (filePath.startsWith(sep) ? sep : '') + parts.join(sep)
-      updateConfig({ localPath: dir || filePath })
-    }
-    e.target.value = ''
   }
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -159,16 +141,6 @@ export default function EndpointPicker({ label, value, onChange, deviceId, onDev
       {/* Local: folder picker */}
       {!isRemote && (
         <>
-          {/* Hidden file input for local drag-and-drop fallback */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            // @ts-expect-error webkitdirectory is non-standard
-            webkitdirectory=""
-            className="hidden"
-            onChange={handleFileInputChange}
-          />
-
           {hasLocal ? (
             /* Selected state */
             <SelectedFolderPanel
@@ -200,20 +172,18 @@ export default function EndpointPicker({ label, value, onChange, deviceId, onDev
               </div>
               <p className="font-semibold text-sm text-center text-foreground">{label}</p>
 
-              {/* Remote browse via agent */}
               {agentsList.length > 0 ? (
                 <Button type="button" onClick={() => setPickerOpen(true)}>
                   Browse Folders
                 </Button>
               ) : (
-                <div className="flex flex-col items-center gap-1">
-                  <Button type="button" onClick={handleBrowse} variant="outline">
-                    Browse Local
-                  </Button>
-                  <p className="text-xs text-muted-foreground text-center">
-                    No agents online — local browser only
-                  </p>
-                </div>
+                <p className="text-xs text-muted-foreground text-center">
+                  Connect the{' '}
+                  <a href="/download" className="underline underline-offset-2 hover:text-foreground">
+                    desktop app
+                  </a>{' '}
+                  to browse folders
+                </p>
               )}
 
             </div>

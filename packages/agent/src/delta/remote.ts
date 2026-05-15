@@ -8,6 +8,7 @@ import { joinRemote, throwIfAborted, mtimeEqual, fileChanged, resolveAction, typ
 import type { StateStore, StoredFileState } from '../state'
 import { RelayClient } from '../relayClient'
 import { ensureSignature, fileSHA256, resolveEnginePath, runEngine, streamSHA256 } from './engine'
+import { assertAllowedLocalEndpoint } from '../fileGuard'
 
 const DEFAULT_BLOCK_SIZE = 64 * 1024
 const RELAY_CHUNK_BYTES = 512 * 1024
@@ -88,6 +89,7 @@ export async function runRemoteDeltaSync(
   const sourceLocation = job.direction === 'rtl' ? job.destination : job.source
   const targetLocation = job.direction === 'rtl' ? job.source : job.destination
   const targetDeviceId = job.direction === 'rtl' ? job.sourceDeviceId! : job.destinationDeviceId!
+  await assertAllowedLocalEndpoint(sourceLocation)
   const source = resolveBackend(sourceLocation)
   try {
     throwIfAborted(signal)
@@ -153,6 +155,7 @@ async function runRemoteBidirectionalSync(
   const destinationDeviceId = job.destinationDeviceId!
 
   try {
+    await assertAllowedLocalEndpoint(job.source)
     throwIfAborted(signal)
     await source.backend.mkdirp(source.rootPath)
     const [sourceFiles, targetEntries] = await Promise.all([
@@ -715,6 +718,7 @@ async function uploadStreamInChunks(
 }
 
 async function handleManifest(root: string): Promise<RemoteManifestEntry[]> {
+  await assertAllowedLocalEndpoint(root)
   const target = resolveBackend(root)
   try {
     await target.backend.mkdirp(target.rootPath)
@@ -735,6 +739,8 @@ async function handleManifest(root: string): Promise<RemoteManifestEntry[]> {
 async function handleSignature(root: string, relativePath: string): Promise<{ signature: any }> {
   const enginePath = resolveEnginePath()
   if (!enginePath) throw new Error('sync engine binary is not available')
+  assertSafeRelativePath(relativePath)
+  await assertAllowedLocalEndpoint(root)
 
   const target = resolveBackend(root)
   const targetPath = joinRemote(target.rootPath, relativePath)
@@ -766,6 +772,11 @@ async function handleSendFull(
   relativePath: string,
   targetRoot: string,
 ): Promise<RemoteTransferStats> {
+  assertSafeRelativePath(relativePath)
+  await Promise.all([
+    assertAllowedLocalEndpoint(root),
+    assertAllowedLocalEndpoint(targetRoot),
+  ])
   const source = resolveBackend(root)
   try {
     const files = await source.backend.walk(source.rootPath)
@@ -795,6 +806,7 @@ async function handleSendDelta(
   signature: any,
   mode: 'auto' | 'delta' | 'full',
 ): Promise<RemoteTransferStats> {
+  assertSafeRelativePath(relativePath)
   if (mode === 'full') {
     return handleSendFull(relay, requesterDeviceId, root, relativePath, targetRoot)
   }
@@ -805,6 +817,10 @@ async function handleSendDelta(
     return handleSendFull(relay, requesterDeviceId, root, relativePath, targetRoot)
   }
 
+  await Promise.all([
+    assertAllowedLocalEndpoint(root),
+    assertAllowedLocalEndpoint(targetRoot),
+  ])
   const source = resolveBackend(root)
   const workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sync-tool-send-delta-'))
   try {
@@ -851,6 +867,9 @@ async function handleMove(
   toRelativePath: string,
   meta: { size: number; mtimeMs: number },
 ) {
+  assertSafeRelativePath(fromRelativePath)
+  assertSafeRelativePath(toRelativePath)
+  await assertAllowedLocalEndpoint(root)
   const target = resolveBackend(root)
   try {
     if (!target.backend.move) throw new Error('target backend does not support move')
@@ -872,6 +891,8 @@ async function handleTransferStart(
   meta: { size: number; mtimeMs: number },
 ) {
   if (kind !== 'delta' && kind !== 'full') throw new Error(`Unsupported transfer kind: ${kind}`)
+  assertSafeRelativePath(relativePath)
+  await assertAllowedLocalEndpoint(root)
   const transferId = crypto.randomUUID()
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sync-tool-transfer-'))
   const tempPath = path.join(tempDir, `${transferId}.payload`)
@@ -951,6 +972,8 @@ function startTransferSessionSweeper() {
 async function applyDeltaPayload(session: TransferSession) {
   const enginePath = resolveEnginePath()
   if (!enginePath) throw new Error('sync engine binary is not available')
+  assertSafeRelativePath(session.relativePath)
+  await assertAllowedLocalEndpoint(session.root)
 
   const target = resolveBackend(session.root)
   const targetPath = joinRemote(target.rootPath, session.relativePath)
@@ -977,6 +1000,8 @@ async function applyDeltaPayload(session: TransferSession) {
 }
 
 async function writeFullPayload(session: TransferSession) {
+  assertSafeRelativePath(session.relativePath)
+  await assertAllowedLocalEndpoint(session.root)
   const target = resolveBackend(session.root)
   const targetPath = joinRemote(target.rootPath, session.relativePath)
   try {
@@ -987,6 +1012,12 @@ async function writeFullPayload(session: TransferSession) {
   } finally {
     await target.backend.close?.()
   }
+}
+
+function assertSafeRelativePath(relativePath: string): void {
+  if (!relativePath || path.isAbsolute(relativePath)) throw new Error(`Invalid relative path: ${relativePath}`)
+  const normalized = path.normalize(relativePath)
+  if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) throw new Error(`Invalid relative path: ${relativePath}`)
 }
 
 async function assertTargetHash(

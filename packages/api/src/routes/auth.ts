@@ -3,12 +3,18 @@ import { v4 as uuid } from 'uuid'
 import { hashPassword, checkPassword, signJwt } from '../auth'
 import { usersDb } from '../db'
 import { requireAuth } from '../middleware/requireAuth'
+import { createRateLimiter, rateLimitIp } from '../rateLimit'
 
 export function createAuthRouter(): Router {
   const router = Router()
+  const authRateLimit = createRateLimiter({
+    windowMs: 15 * 60_000,
+    max:      20,
+    key:      (req) => `auth:${rateLimitIp(req)}:${String(req.body?.email ?? '').toLowerCase()}`,
+  })
 
   // POST /api/auth/register — open only when no users exist
-  router.post('/register', async (req, res) => {
+  router.post('/register', authRateLimit, async (req, res) => {
     try {
       if (await usersDb.count() > 0) {
         res.status(403).json({ error: 'Registration is closed' })
@@ -29,7 +35,7 @@ export function createAuthRouter(): Router {
   })
 
   // POST /api/auth/login
-  router.post('/login', async (req, res) => {
+  router.post('/login', authRateLimit, async (req, res) => {
     try {
       const { email, password } = req.body
       if (!email || !password) { res.status(400).json({ error: 'email and password are required' }); return }

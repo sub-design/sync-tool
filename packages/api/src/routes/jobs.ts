@@ -5,8 +5,10 @@ import { requireAuth } from '../middleware/requireAuth'
 import type { ServerToAgent } from '@sync-tool/shared'
 
 export function createJobsRouter(
-  broadcast: (msg: ServerToAgent) => void,
-  onJobsChanged: () => void = () => {},
+  broadcast:        (msg: ServerToAgent) => void,
+  sendToAgent:      (deviceId: string, msg: ServerToAgent) => boolean,
+  pendingRollbacks: Map<string, number>,
+  onJobsChanged:    () => void = () => {},
 ): ExpressRouter {
   const router = Router()
   router.use(requireAuth)
@@ -26,14 +28,18 @@ export function createJobsRouter(
   router.post('/', async (req, res) => {
     const {
       name, source, destination,
-      direction = 'ltr', transferMode = 'auto', reliability = {},
+      direction = 'ltr', transferMode = 'auto', deletionPolicy = 'backup', reliability = {},
       sourceDeviceId, destinationDeviceId, watch = false, schedule,
     } = req.body
     if (!name || !source || !destination) {
       res.status(400).json({ error: 'name, source, destination are required' }); return
     }
     const job = await jobsDb.create(
-      { id: uuid(), name, source, destination, direction, transferMode, reliability, sourceDeviceId, destinationDeviceId, watch: Boolean(watch), schedule },
+      {
+        id: uuid(), name, source, destination, direction, transferMode, deletionPolicy,
+        reliability: { encryptionEnabled: true, ...reliability },
+        sourceDeviceId, destinationDeviceId, watch: Boolean(watch), schedule,
+      },
       req.userId,
     )
     onJobsChanged()
@@ -91,6 +97,71 @@ export function createJobsRouter(
     }
     const limit = parseInt(req.query.limit as string) || 20
     res.json(await logDb.list(req.params.id, limit))
+  })
+
+  // ── Rollback ──────────────────────────────────────────────────────────────────
+
+  router.get('/:id/log/:logId/rollback', async (req, res) => {
+    if ((await jobsDb.getUserId(req.params.id)) !== req.userId) {
+      res.status(404).json({ error: 'Job not found' }); return
+    }
+    const logId = parseInt(req.params.logId)
+    if (isNaN(logId)) { res.status(400).json({ error: 'Invalid logId' }); return }
+
+    const data = await logDb.getRollbackManifest(logId)
+    if (!data) { res.status(404).json({ error: 'No rollback data for this log entry' }); return }
+    if (data.status !== 'available') {
+      res.status(409).json({ error: `Rollback is ${data.status}` }); return
+    }
+
+    res.json({
+      logId,
+      status:         data.status,
+      totalFiles:     data.manifest.entries.length,
+      filesToRestore: data.manifest.entries
+        .filter(e => e.action !== 'created')
+        .map(e => ({ relativePath: e.relativePath, action: e.action, prevSize: e.prevSize })),
+      filesToDelete: data.manifest.entries
+        .filter(e => e.action === 'created')
+        .map(e => ({ relativePath: e.relativePath })),
+    })
+  })
+
+  router.post('/:id/log/:logId/rollback', async (req, res) => {
+    const job = await jobsDb.get(req.params.id)
+    if (!job || (await jobsDb.getUserId(req.params.id)) !== req.userId) {
+      res.status(404).json({ error: 'Job not found' }); return
+    }
+    if (job.status === 'running' || job.status === 'queued') {
+      res.status(409).json({ error: 'Cannot rollback while job is running' }); return
+    }
+
+    const logId = parseInt(req.params.logId)
+    if (isNaN(logId)) { res.status(400).json({ error: 'Invalid logId' }); return }
+
+    const data = await logDb.getRollbackManifest(logId)
+    if (!data) { res.status(404).json({ error: 'No rollback data for this log entry' }); return }
+    if (data.status !== 'available') {
+      res.status(409).json({ error: `Rollback is ${data.status}` }); return
+    }
+
+    const claimed = await logDb.markRollbackUsed(logId)
+    if (!claimed) { res.status(409).json({ error: 'Rollback already in progress or used' }); return }
+
+    const sent = sendToAgent(data.deviceId, {
+      type:     'job:rollback',
+      job,
+      logId:    String(logId),
+      manifest: data.manifest,
+    })
+
+    if (!sent) {
+      await logDb.resetRollbackToAvailable(logId)
+      res.status(502).json({ error: 'Agent is offline — rollback data is still available' }); return
+    }
+
+    pendingRollbacks.set(job.id, logId)
+    res.json({ ok: true, logId })
   })
 
   return router

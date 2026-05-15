@@ -40,6 +40,7 @@ const schema = z.object({
   direction:          z.enum(['ltr', 'bidir', 'rtl']),
   transferMode:       z.enum(['auto', 'delta', 'full']),
   conflictStrategy:   z.enum(['newer-wins', 'skip', 'manual']),
+  deletionPolicy:     z.enum(['backup', 'backup-with-deletes', 'mirror']),
   encryptionEnabled:  z.boolean(),
   encryptionKeyId:    z.string().optional(),
   retryAttempts:      z.number().int().min(0).max(10),
@@ -71,6 +72,12 @@ const CONFLICT_STRATEGIES = [
   { value: 'manual'     as const, label: 'Manual',     description: 'Mark for manual resolution' },
 ]
 
+const DELETION_POLICIES = [
+  { value: 'backup' as const, label: 'Backup', description: 'Keep destination files when they disappear from source' },
+  { value: 'backup-with-deletes' as const, label: 'With deletes', description: 'Delete only destination files previously synced by this job' },
+  { value: 'mirror' as const, label: 'Mirror', description: 'Make destination exactly match source' },
+]
+
 export interface JobFormProps {
   job?: Job
   onSuccess: (job: Job) => void
@@ -97,7 +104,8 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
       direction:          job?.direction   ?? 'ltr',
       transferMode:       job?.transferMode ?? 'auto',
       conflictStrategy:   job?.conflictStrategy ?? 'newer-wins',
-      encryptionEnabled:  job?.reliability?.encryptionEnabled ?? false,
+      deletionPolicy:     job?.deletionPolicy ?? 'backup',
+      encryptionEnabled:  job ? (job.reliability?.encryptionEnabled ?? false) : true,
       encryptionKeyId:    job?.reliability?.encryptionKeyId ?? '',
       retryAttempts:      job?.reliability?.retryAttempts ?? 3,
       retryMinTimeoutMs:  job?.reliability?.retryMinTimeoutMs ?? 500,
@@ -115,6 +123,7 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
   const direction        = watch('direction')
   const transferMode     = watch('transferMode')
   const conflictStrategy = watch('conflictStrategy')
+  const deletionPolicy   = watch('deletionPolicy')
   const encryptionEnabled = watch('encryptionEnabled')
   const resumeEnabled    = watch('resumeEnabled')
   const watchEnabled     = watch('watch')
@@ -137,6 +146,7 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
         direction:        values.direction,
         transferMode:     values.transferMode,
         conflictStrategy: values.conflictStrategy,
+        deletionPolicy:   values.direction === 'bidir' ? 'backup' : values.deletionPolicy,
         reliability: {
           encryptionEnabled:  values.encryptionEnabled,
           encryptionKeyId:    values.encryptionKeyId || undefined,
@@ -326,6 +336,32 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   {CONFLICT_STRATEGIES.find(s => s.value === conflictStrategy)?.description}
+                </p>
+              </div>
+            )}
+
+            {/* Destination deletion policy — one-way only */}
+            {direction !== 'bidir' && (
+              <div className="flex flex-col gap-1.5">
+                <Label>Destination deletes</Label>
+                <div className="grid grid-cols-3 rounded-md border border-border overflow-hidden">
+                  {DELETION_POLICIES.map(({ value, label, description }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      title={description}
+                      className={[
+                        'rounded-none px-3 py-2 text-sm not-last:border-r border-border hover:bg-accent transition-colors',
+                        deletionPolicy === value ? 'bg-secondary font-medium' : '',
+                      ].join(' ')}
+                      onClick={() => setValue('deletionPolicy', value, { shouldValidate: true })}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {DELETION_POLICIES.find(policy => policy.value === deletionPolicy)?.description}
                 </p>
               </div>
             )}

@@ -18,6 +18,12 @@ const directionConfig: Record<JobDirection, { label: string; Icon: React.Element
   bidir: { label: '↔ Both ways',  Icon: ArrowLeftRight },
 }
 
+const deletionPolicyLabel: Record<NonNullable<Job['deletionPolicy']>, string> = {
+  backup: 'Backup',
+  'backup-with-deletes': 'Deletes',
+  mirror: 'Mirror',
+}
+
 export default function JobCard({ job }: { job: Job }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -54,6 +60,11 @@ export default function JobCard({ job }: { job: Job }) {
               <Icon className="size-3" />
               {label}
             </Badge>
+            {job.direction !== 'bidir' && (
+              <Badge variant="secondary">
+                {deletionPolicyLabel[job.deletionPolicy ?? 'backup']}
+              </Badge>
+            )}
           </div>
         </div>
       </CardHeader>

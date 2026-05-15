@@ -1,11 +1,14 @@
-import type { SyncResult, SyncProgress, Job } from '@sync-tool/shared'
+import type { SyncResult, SyncProgress, Job, RollbackManifest, RollbackFileAction, RollbackSide, RollbackResult } from '@sync-tool/shared'
 import crypto from 'crypto'
 import fs from 'fs'
+import path from 'path'
+import { pipeline } from 'stream/promises'
 import { Transform } from 'stream'
 import pRetry from 'p-retry'
 import { transferFileDelta } from './delta/engine'
 import { streamSHA256 } from './delta/engine'
 import type { StoredFileState, StateStore } from './state'
+import { STATE_DIR } from './state'
 import { acquireLock, releaseLock, isLocalPath } from './lock'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -51,6 +54,94 @@ export interface StorageBackend {
 // ─────────────────────────────────────────────────────────────────────────────
 //  Sync Engine
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── Rollback context (per sync run) ──────────────────────────────────────────
+
+interface RollbackContext {
+  jobId:   string
+  backupId: string   // UUID used as backup directory name
+  baseDir: string    // {STATE_DIR}/rollback/{jobId}/{backupId}
+  entries: import('@sync-tool/shared').RollbackFileEntry[]
+}
+
+function makeRollbackBaseDir(jobId: string, backupId: string): string {
+  return path.join(STATE_DIR, 'rollback', jobId, backupId)
+}
+
+async function backupBeforeAction(
+  entry:    FileEntry,
+  side:     RollbackSide,
+  action:   RollbackFileAction,
+  backend:  StorageBackend,
+  rollback: RollbackContext,
+): Promise<void> {
+  const destPath = path.join(rollback.baseDir, side, entry.relativePath)
+  await fs.promises.mkdir(path.dirname(destPath), { recursive: true })
+
+  try {
+    const localFilePath = backend.localPath?.(entry.absolutePath)
+    if (localFilePath) {
+      await fs.promises.cp(localFilePath, destPath, { preserveTimestamps: true })
+    } else {
+      const readStream = await backend.read(entry.absolutePath)
+      await pipeline(readStream as NodeJS.ReadableStream & AsyncIterable<unknown>, fs.createWriteStream(destPath))
+    }
+    rollback.entries.push({
+      relativePath: entry.relativePath,
+      side,
+      action,
+      backupPath: destPath,
+      prevSize:   entry.size,
+      prevMtimeMs: entry.mtimeMs,
+      prevChecksum: null,
+    })
+  } catch (err: any) {
+    console.warn(`[rollback] Could not backup ${entry.relativePath}: ${err.message}`)
+    rollback.entries.push({
+      relativePath: entry.relativePath,
+      side,
+      action,
+      backupPath:  '',
+      prevSize:    entry.size,
+      prevMtimeMs: entry.mtimeMs,
+      prevChecksum: null,
+    })
+  }
+}
+
+function recordCreated(relativePath: string, side: RollbackSide, rollback: RollbackContext): void {
+  rollback.entries.push({
+    relativePath,
+    side,
+    action:      'created',
+    backupPath:  '',
+    prevSize:    null,
+    prevMtimeMs: null,
+    prevChecksum: null,
+  })
+}
+
+async function pruneRollbackData(jobId: string): Promise<void> {
+  const jobRollbackDir = path.join(STATE_DIR, 'rollback', jobId)
+  try {
+    const dirs = await fs.promises.readdir(jobRollbackDir)
+    // Dirs are named by UUID but we sort by mtime to determine age
+    const dirStats = await Promise.all(
+      dirs.map(async (d) => {
+        const full = path.join(jobRollbackDir, d)
+        const stat = await fs.promises.stat(full).catch(() => null)
+        return { name: d, mtimeMs: stat?.mtimeMs ?? 0 }
+      })
+    )
+    // Sort newest first, keep 5, delete the rest
+    dirStats.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    for (const { name } of dirStats.slice(5)) {
+      await fs.promises.rm(path.join(jobRollbackDir, name), { recursive: true, force: true })
+    }
+  } catch {
+    // Directory may not exist yet — ignore
+  }
+}
 
 const MTIME_TOLERANCE_MS = 2_000
 const HOUR_MS            = 3_600_000
@@ -142,6 +233,7 @@ export async function runSync(
     startedAt,
     endedAt:          0,
     filesCopied:      0,
+    filesDeleted:     0,
     filesSkipped:     0,
     filesErrored:     0,
     conflictsPending: 0,
@@ -154,6 +246,15 @@ export async function runSync(
     errors:           [],
   }
 
+  const backupId = crypto.randomUUID()
+  const rollback: RollbackContext = {
+    jobId:    job.id,
+    backupId,
+    baseDir:  makeRollbackBaseDir(job.id, backupId),
+    entries:  [],
+  }
+  await fs.promises.mkdir(rollback.baseDir, { recursive: true })
+
   const lockDir = isLocalPath(srcPath) ? srcPath : null
   if (lockDir) await acquireLock(lockDir, job.id)
 
@@ -162,13 +263,14 @@ export async function runSync(
     await dstBackend.mkdirp(dstPath)
 
     if (job.direction === 'bidir') {
-      await syncBidirectional(job, srcBackend, dstBackend, srcPath, dstPath, state, result, onProgress, signal)
+      await syncBidirectional(job, srcBackend, dstBackend, srcPath, dstPath, state, result, onProgress, signal, rollback)
     } else {
       const [sourcePath, targetPath, sourceBackend, targetBackend] = job.direction === 'rtl'
         ? [dstPath, srcPath, dstBackend, srcBackend]
         : [srcPath, dstPath, srcBackend, dstBackend]
+      const targetSide: RollbackSide = job.direction === 'rtl' ? 'src' : 'dst'
 
-      await syncOneWay(job, sourcePath, targetPath, sourceBackend, targetBackend, result, onProgress, signal)
+      await syncOneWay(job, sourcePath, targetPath, sourceBackend, targetBackend, state, result, onProgress, signal, rollback, targetSide)
     }
   } finally {
     if (lockDir) await releaseLock(lockDir)
@@ -176,6 +278,14 @@ export async function runSync(
     await srcBackend.close?.()
     if (dstBackend !== srcBackend) await dstBackend.close?.()
   }
+
+  result.rollbackManifest = {
+    jobId:     job.id,
+    backupId,
+    createdAt: Date.now(),
+    entries:   rollback.entries,
+  }
+  void pruneRollbackData(job.id)
 
   return result
 }
@@ -188,14 +298,29 @@ async function syncOneWay(
   dstPath:    string,
   srcBackend: StorageBackend,
   dstBackend: StorageBackend,
+  state:      StateStore,
   result:     SyncResult,
   onProgress: (p: Partial<SyncProgress>) => void,
   signal?:     AbortSignal,
+  rollback?:   RollbackContext,
+  targetSide?: RollbackSide,
 ) {
   throwIfAborted(signal)
   const srcFiles = await srcBackend.walk(srcPath)
   throwIfAborted(signal)
   const dstFiles = await dstBackend.walk(dstPath)
+  const prevState = state.getJobState(job.id)
+
+  for (const srcDir of entriesByDepth([...srcFiles.values()].filter((e) => e.isDirectory), 'shallow-first')) {
+    throwIfAborted(signal)
+    const dstDirPath = joinRemote(dstPath, srcDir.relativePath)
+    await dstBackend.mkdirp(dstDirPath)
+    dstFiles.set(srcDir.relativePath, {
+      ...srcDir,
+      absolutePath: dstDirPath,
+      mtimeMs:      0,
+    })
+  }
 
   const entries = [...srcFiles.values()].filter((e) => !e.isDirectory)
   let processed = 0
@@ -212,9 +337,20 @@ async function syncOneWay(
 
     if (needsCopy) {
       try {
+        if (rollback && targetSide) {
+          if (dstEntry) {
+            await backupBeforeAction(dstEntry, targetSide, 'overwritten', dstBackend, rollback)
+          } else {
+            recordCreated(srcEntry.relativePath, targetSide, rollback)
+          }
+        }
         const transferred = await transferFile(srcEntry, srcBackend, joinRemote(dstPath, srcEntry.relativePath), dstBackend, dstEntry, job, signal)
         result.filesCopied++
         applyTransferStats(result, transferred)
+        dstFiles.set(srcEntry.relativePath, {
+          ...srcEntry,
+          absolutePath: joinRemote(dstPath, srcEntry.relativePath),
+        })
       } catch (err: any) {
         result.filesErrored++
         result.errors.push(`${srcEntry.relativePath}: ${err.message}`)
@@ -232,6 +368,94 @@ async function syncOneWay(
       bytesTransferred: result.bytesTransferred,
     })
   }
+
+  const deletionPolicy = job.deletionPolicy ?? 'backup'
+  const deleteCandidates = oneWayDeleteCandidates(deletionPolicy, srcFiles, dstFiles, prevState)
+
+  for (const dstEntry of entriesByDepth(deleteCandidates, 'deep-first')) {
+    throwIfAborted(signal)
+    if (!dstBackend.delete) {
+      result.filesErrored++
+      result.errors.push(`${dstEntry.relativePath}: destination backend does not support delete`)
+      continue
+    }
+
+    try {
+      if (rollback && targetSide) {
+        await backupBeforeAction(dstEntry, targetSide, 'deleted', dstBackend, rollback)
+      }
+      await dstBackend.delete(joinRemote(dstPath, dstEntry.relativePath))
+      result.filesDeleted = (result.filesDeleted ?? 0) + 1
+      dstFiles.delete(dstEntry.relativePath)
+    } catch (err: any) {
+      result.filesErrored++
+      result.errors.push(`${dstEntry.relativePath}: ${err.message}`)
+    }
+  }
+
+  state.setJobState(job.id, oneWayState(srcFiles, dstFiles))
+}
+
+function oneWayDeleteCandidates(
+  deletionPolicy: NonNullable<Job['deletionPolicy']>,
+  srcFiles: Map<string, FileEntry>,
+  dstFiles: Map<string, FileEntry>,
+  prevState: Map<string, StoredFileState>,
+): FileEntry[] {
+  if (deletionPolicy === 'backup') return []
+
+  if (deletionPolicy === 'mirror') {
+    return [...dstFiles.entries()]
+      .filter(([rel]) => !srcFiles.has(rel))
+      .map(([, entry]) => entry)
+  }
+
+  return [...prevState.entries()]
+    .filter(([rel, prev]) => {
+      const dstEntry = dstFiles.get(rel)
+      return prev.srcMtimeMs != null
+        && !srcFiles.has(rel)
+        && !!dstEntry
+        && entryMatchesStoredDst(dstEntry, prev)
+    })
+    .map(([rel]) => dstFiles.get(rel)!)
+}
+
+function entryMatchesStoredDst(entry: FileEntry, prev: StoredFileState): boolean {
+  if (prev.dstSize == null || prev.dstMtimeMs == null) return false
+  return entry.size === prev.dstSize && mtimeEqual(entry.mtimeMs, prev.dstMtimeMs)
+}
+
+function oneWayState(
+  srcFiles: Map<string, FileEntry>,
+  dstFiles: Map<string, FileEntry>,
+): Map<string, StoredFileState> {
+  const next = new Map<string, StoredFileState>()
+  for (const [rel, srcEntry] of srcFiles) {
+    const dstEntry = dstFiles.get(rel)
+    next.set(rel, {
+      srcSize:    srcEntry.size,
+      srcMtimeMs: srcEntry.mtimeMs,
+      dstSize:    dstEntry?.size    ?? null,
+      dstMtimeMs: dstEntry?.mtimeMs ?? null,
+      syncedAt:   Date.now(),
+    })
+  }
+  return next
+}
+
+function entriesByDepth(entries: FileEntry[], order: 'shallow-first' | 'deep-first'): FileEntry[] {
+  return [...entries].sort((a, b) => {
+    const depthA = pathDepth(a.relativePath)
+    const depthB = pathDepth(b.relativePath)
+    return order === 'shallow-first'
+      ? depthA - depthB
+      : depthB - depthA
+  })
+}
+
+function pathDepth(relativePath: string): number {
+  return relativePath.split(/[\\/]+/).filter(Boolean).length
 }
 
 // ── Bidirectional sync (state-based) ─────────────────────────────────────────
@@ -246,6 +470,7 @@ async function syncBidirectional(
   result:     SyncResult,
   onProgress: (p: Partial<SyncProgress>) => void,
   signal?:    AbortSignal,
+  rollback?:  RollbackContext,
 ) {
   throwIfAborted(signal)
   const srcFiles  = await srcBackend.walk(srcPath)
@@ -308,6 +533,10 @@ async function syncBidirectional(
       switch (action) {
         case 'copy-to-dst':
           if (srcEntry) {
+            if (rollback) {
+              if (dstEntry) await backupBeforeAction(dstEntry, 'dst', 'overwritten', dstBackend, rollback)
+              else          recordCreated(rel, 'dst', rollback)
+            }
             const transferred = await transferFile(srcEntry, srcBackend, joinRemote(dstPath, rel), dstBackend, dstEntry, job, signal)
             result.filesCopied++
             applyTransferStats(result, transferred)
@@ -318,6 +547,10 @@ async function syncBidirectional(
 
         case 'copy-to-src':
           if (dstEntry) {
+            if (rollback) {
+              if (srcEntry) await backupBeforeAction(srcEntry, 'src', 'overwritten', srcBackend, rollback)
+              else          recordCreated(rel, 'src', rollback)
+            }
             const transferred = await transferFile(dstEntry, dstBackend, joinRemote(srcPath, rel), srcBackend, srcEntry, job, signal)
             result.filesCopied++
             applyTransferStats(result, transferred)
@@ -328,6 +561,7 @@ async function syncBidirectional(
 
         case 'delete-dst':
           if (dstBackend.delete) {
+            if (rollback && dstEntry) await backupBeforeAction(dstEntry, 'dst', 'deleted', dstBackend, rollback)
             await dstBackend.delete(joinRemote(dstPath, rel))
             stateDstEntry = undefined
           } else {
@@ -337,6 +571,7 @@ async function syncBidirectional(
 
         case 'delete-src':
           if (srcBackend.delete) {
+            if (rollback && srcEntry) await backupBeforeAction(srcEntry, 'src', 'deleted', srcBackend, rollback)
             await srcBackend.delete(joinRemote(srcPath, rel))
             stateSrcEntry = undefined
           } else {
@@ -675,14 +910,21 @@ function createEncryptionStream(job: Job): NodeJS.ReadWriteStream {
 function encryptionKey(job: Job): Buffer {
   const keyId = job.reliability?.encryptionKeyId
   const envName = keyId ? `SYNC_ENCRYPTION_KEY_${keyId}` : 'SYNC_ENCRYPTION_KEY'
-  const raw = process.env[envName] ?? process.env.SYNC_ENCRYPTION_KEY
-  if (!raw) throw new Error(`Encryption is enabled but ${envName} is not set`)
+  const fileEnvName = `${envName}_FILE`
+  const raw = encryptionKeyRaw(fileEnvName, envName)
+  if (!raw) throw new Error(`Encryption is enabled but ${fileEnvName} or ${envName} is not set`)
 
   const decoded = /^[a-f0-9]{64}$/i.test(raw)
     ? Buffer.from(raw, 'hex')
     : Buffer.from(raw, 'base64')
   if (decoded.length !== 32) throw new Error(`${envName} must decode to a 32-byte AES-256 key`)
   return decoded
+}
+
+function encryptionKeyRaw(fileEnvName: string, envName: string): string | undefined {
+  const filePath = process.env[fileEnvName] ?? process.env.SYNC_ENCRYPTION_KEY_FILE
+  if (filePath) return fs.readFileSync(filePath, 'utf8').trim()
+  return process.env[envName] ?? process.env.SYNC_ENCRYPTION_KEY
 }
 
 class TokenBucketThrottle extends Transform {
@@ -795,4 +1037,79 @@ export function joinRemote(base: string, rel: string): string {
 
   const sep = base.includes('\\') ? '\\' : '/'
   return base.endsWith(sep) ? `${base}${rel}` : `${base}${sep}${rel}`
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Rollback — restore files from a previous sync run
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function performRollback(
+  manifest:   RollbackManifest,
+  srcBackend: StorageBackend,
+  dstBackend: StorageBackend,
+  srcPath:    string,
+  dstPath:    string,
+  onProgress: (p: { filesRestored: number; filesTotal: number; currentFile: string }) => void,
+  signal?:    AbortSignal,
+): Promise<RollbackResult> {
+  const startedAt = Date.now()
+  const result: RollbackResult = {
+    jobId:         manifest.jobId,
+    startedAt,
+    endedAt:       0,
+    filesRestored: 0,
+    filesDeleted:  0,
+    filesErrored:  0,
+    errors:        [],
+  }
+
+  const total = manifest.entries.length
+
+  for (const entry of manifest.entries) {
+    throwIfAborted(signal)
+
+    const [backend, rootPath] = entry.side === 'src'
+      ? [srcBackend, srcPath]
+      : [dstBackend, dstPath]
+
+    const targetPath = joinRemote(rootPath, entry.relativePath)
+
+    try {
+      if (entry.action === 'created') {
+        if (backend.delete) {
+          await backend.delete(targetPath)
+          result.filesDeleted++
+        } else {
+          result.errors.push(`${entry.relativePath}: backend does not support delete`)
+          result.filesErrored++
+        }
+      } else {
+        if (!entry.backupPath) {
+          result.errors.push(`${entry.relativePath}: backup not available`)
+          result.filesErrored++
+        } else {
+          const stat = await fs.promises.stat(entry.backupPath)
+          await backend.write(
+            targetPath,
+            fs.createReadStream(entry.backupPath),
+            { size: entry.prevSize ?? stat.size, mtimeMs: entry.prevMtimeMs ?? stat.mtimeMs },
+            { atomic: true },
+          )
+          result.filesRestored++
+        }
+      }
+    } catch (err: any) {
+      result.filesErrored++
+      result.errors.push(`${entry.relativePath}: ${err.message}`)
+    }
+
+    onProgress({
+      filesRestored: result.filesRestored,
+      filesTotal:    total,
+      currentFile:   entry.relativePath,
+    })
+  }
+
+  result.endedAt = Date.now()
+  return result
 }

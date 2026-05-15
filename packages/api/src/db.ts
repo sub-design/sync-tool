@@ -1,5 +1,5 @@
 import postgres from 'postgres'
-import type { Job, SyncResult } from '@sync-tool/shared'
+import type { Job, SyncResult, RollbackManifest, RollbackResult } from '@sync-tool/shared'
 
 // ── Connection ────────────────────────────────────────────────────────────────
 
@@ -42,6 +42,7 @@ export async function initDb(): Promise<void> {
       destination           TEXT   NOT NULL,
       direction             TEXT   NOT NULL DEFAULT 'ltr',
       transfer_mode         TEXT   DEFAULT 'auto',
+      deletion_policy       TEXT   DEFAULT 'backup',
       reliability           TEXT   DEFAULT '{}',
       source_device_id      TEXT,
       destination_device_id TEXT,
@@ -64,6 +65,7 @@ export async function initDb(): Promise<void> {
       started_at        BIGINT NOT NULL,
       ended_at          BIGINT,
       files_copied      INT    DEFAULT 0,
+      files_deleted     INT    DEFAULT 0,
       files_skipped     INT    DEFAULT 0,
       files_errored     INT    DEFAULT 0,
       bytes_transferred BIGINT DEFAULT 0,
@@ -79,18 +81,25 @@ export async function initDb(): Promise<void> {
   // Idempotent column additions (safe to run repeatedly)
   for (const stmt of [
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS transfer_mode TEXT DEFAULT 'auto'`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS deletion_policy TEXT DEFAULT 'backup'`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS reliability TEXT DEFAULT '{}'`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS source_device_id TEXT`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS destination_device_id TEXT`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS watch BOOLEAN NOT NULL DEFAULT false`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS logical_bytes BIGINT DEFAULT 0`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS files_deleted INT DEFAULT 0`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS delta_bytes BIGINT DEFAULT 0`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS full_bytes BIGINT DEFAULT 0`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS delta_files INT DEFAULT 0`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS full_files INT DEFAULT 0`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed'`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS error_message TEXT`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS rollback_manifest TEXT`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS rollback_status TEXT NOT NULL DEFAULT 'none'`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS rollback_device_id TEXT`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS is_rollback BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS rollback_of BIGINT`,
   ]) {
     await sql.unsafe(stmt)
   }
@@ -106,6 +115,7 @@ function rowToJob(row: Record<string, unknown>): Job {
     destination:         row.destination as string,
     direction:           row.direction as Job['direction'],
     transferMode:        ((row.transfer_mode as string) ?? 'auto') as Job['transferMode'],
+    deletionPolicy:      ((row.deletion_policy as string) ?? 'backup') as Job['deletionPolicy'],
     reliability:         parseJson(row.reliability as string),
     sourceDeviceId:      (row.source_device_id as string) ?? undefined,
     destinationDeviceId: (row.destination_device_id as string) ?? undefined,
@@ -203,11 +213,11 @@ export const jobsDb = {
     const full: Job = { ...job, status: 'idle', createdAt: now, updatedAt: now }
     await sql`
       INSERT INTO jobs
-        (id, user_id, name, source, destination, direction, transfer_mode, reliability,
+        (id, user_id, name, source, destination, direction, transfer_mode, deletion_policy, reliability,
          source_device_id, destination_device_id, watch, schedule, status, created_at, updated_at)
       VALUES
         (${full.id}, ${userId}, ${full.name}, ${full.source}, ${full.destination},
-         ${full.direction}, ${full.transferMode ?? 'auto'}, ${JSON.stringify(full.reliability ?? {})},
+         ${full.direction}, ${full.transferMode ?? 'auto'}, ${full.deletionPolicy ?? 'backup'}, ${JSON.stringify(full.reliability ?? {})},
          ${full.sourceDeviceId ?? null}, ${full.destinationDeviceId ?? null},
          ${full.watch ?? false}, ${full.schedule ?? null},
          ${full.status}, ${full.createdAt}, ${full.updatedAt})
@@ -215,7 +225,7 @@ export const jobsDb = {
     return full
   },
 
-  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'transferMode' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'watch' | 'schedule'>>): Promise<Job | undefined> {
+  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'transferMode' | 'deletionPolicy' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'watch' | 'schedule'>>): Promise<Job | undefined> {
     const existing = await jobsDb.get(id)
     if (!existing) return undefined
     const updated: Job = { ...existing, ...patch, updatedAt: Date.now() }
@@ -226,6 +236,7 @@ export const jobsDb = {
         destination = ${updated.destination},
         direction = ${updated.direction},
         transfer_mode = ${updated.transferMode ?? 'auto'},
+        deletion_policy = ${updated.deletionPolicy ?? 'backup'},
         reliability = ${JSON.stringify(updated.reliability ?? {})},
         source_device_id = ${updated.sourceDeviceId ?? null},
         destination_device_id = ${updated.destinationDeviceId ?? null},
@@ -259,42 +270,52 @@ export const jobsDb = {
 // ── Sync log ──────────────────────────────────────────────────────────────────
 
 export interface SyncLogEntry {
-  id:               string
-  job_id:           string
-  status:           'completed' | 'error'
-  error_message:    string | null
-  started_at:       number
-  ended_at:         number | null
-  files_copied:     number
-  files_skipped:    number
-  files_errored:    number
-  bytes_transferred: number
-  logical_bytes:    number
-  delta_bytes:      number
-  full_bytes:       number
-  delta_files:      number
-  full_files:       number
-  errors:           string
+  id:                 string
+  job_id:             string
+  status:             'completed' | 'error'
+  error_message:      string | null
+  started_at:         number
+  ended_at:           number | null
+  files_copied:       number
+  files_deleted:      number
+  files_skipped:      number
+  files_errored:      number
+  bytes_transferred:  number
+  logical_bytes:      number
+  delta_bytes:        number
+  full_bytes:         number
+  delta_files:        number
+  full_files:         number
+  errors:             string
+  rollback_status:    'none' | 'available' | 'used' | 'expired'
+  rollback_device_id: string | null
+  is_rollback:        boolean
+  rollback_of:        string | null
 }
 
 function rowToLogEntry(row: Record<string, unknown>): SyncLogEntry {
   return {
-    id:               String(row.id),
-    job_id:           row.job_id as string,
-    status:           (row.status as string) === 'error' ? 'error' : 'completed',
-    error_message:    (row.error_message as string) ?? null,
-    started_at:       Number(row.started_at),
-    ended_at:         row.ended_at != null ? Number(row.ended_at) : null,
-    files_copied:     Number(row.files_copied ?? 0),
-    files_skipped:    Number(row.files_skipped ?? 0),
-    files_errored:    Number(row.files_errored ?? 0),
-    bytes_transferred: Number(row.bytes_transferred ?? 0),
-    logical_bytes:    Number(row.logical_bytes ?? 0),
-    delta_bytes:      Number(row.delta_bytes ?? 0),
-    full_bytes:       Number(row.full_bytes ?? 0),
-    delta_files:      Number(row.delta_files ?? 0),
-    full_files:       Number(row.full_files ?? 0),
-    errors:           (row.errors as string) ?? '[]',
+    id:                 String(row.id),
+    job_id:             row.job_id as string,
+    status:             (row.status as string) === 'error' ? 'error' : 'completed',
+    error_message:      (row.error_message as string) ?? null,
+    started_at:         Number(row.started_at),
+    ended_at:           row.ended_at != null ? Number(row.ended_at) : null,
+    files_copied:       Number(row.files_copied ?? 0),
+    files_deleted:      Number(row.files_deleted ?? 0),
+    files_skipped:      Number(row.files_skipped ?? 0),
+    files_errored:      Number(row.files_errored ?? 0),
+    bytes_transferred:  Number(row.bytes_transferred ?? 0),
+    logical_bytes:      Number(row.logical_bytes ?? 0),
+    delta_bytes:        Number(row.delta_bytes ?? 0),
+    full_bytes:         Number(row.full_bytes ?? 0),
+    delta_files:        Number(row.delta_files ?? 0),
+    full_files:         Number(row.full_files ?? 0),
+    errors:             (row.errors as string) ?? '[]',
+    rollback_status:    ((row.rollback_status as string) ?? 'none') as SyncLogEntry['rollback_status'],
+    rollback_device_id: (row.rollback_device_id as string) ?? null,
+    is_rollback:        Boolean(row.is_rollback),
+    rollback_of:        row.rollback_of != null ? String(row.rollback_of) : null,
   }
 }
 
@@ -312,6 +333,7 @@ export const logDb = {
         status            = 'completed',
         ended_at          = ${result.endedAt},
         files_copied      = ${result.filesCopied},
+        files_deleted     = ${result.filesDeleted ?? 0},
         files_skipped     = ${result.filesSkipped},
         files_errored     = ${result.filesErrored},
         bytes_transferred = ${result.bytesTransferred},
@@ -336,8 +358,71 @@ export const logDb = {
 
   async list(jobId: string, limit = 20): Promise<SyncLogEntry[]> {
     const rows = await sql`
-      SELECT * FROM sync_log WHERE job_id = ${jobId} ORDER BY started_at DESC LIMIT ${limit}
+      SELECT id, job_id, status, error_message, started_at, ended_at,
+             files_copied, files_deleted, files_skipped, files_errored,
+             bytes_transferred, logical_bytes, delta_bytes, full_bytes, delta_files, full_files,
+             errors, rollback_status, rollback_device_id, is_rollback, rollback_of
+      FROM sync_log WHERE job_id = ${jobId} ORDER BY started_at DESC LIMIT ${limit}
     `
     return rows.map(rowToLogEntry)
+  },
+
+  async saveRollbackManifest(logId: number, manifest: RollbackManifest, deviceId: string): Promise<void> {
+    await sql`
+      UPDATE sync_log SET
+        rollback_manifest  = ${JSON.stringify(manifest)},
+        rollback_status    = 'available',
+        rollback_device_id = ${deviceId}
+      WHERE id = ${logId}
+    `
+  },
+
+  async getRollbackManifest(logId: number): Promise<{
+    manifest: RollbackManifest
+    deviceId: string
+    status:   SyncLogEntry['rollback_status']
+  } | undefined> {
+    const [row] = await sql`
+      SELECT rollback_manifest, rollback_device_id, rollback_status
+      FROM sync_log WHERE id = ${logId}
+    `
+    if (!row?.rollback_manifest) return undefined
+    return {
+      manifest: JSON.parse(row.rollback_manifest as string) as RollbackManifest,
+      deviceId: row.rollback_device_id as string,
+      status:   (row.rollback_status as string) as SyncLogEntry['rollback_status'],
+    }
+  },
+
+  /** Atomically mark a log entry's rollback as used (only if still 'available'). Returns false on race. */
+  async markRollbackUsed(logId: number): Promise<boolean> {
+    const result = await sql`
+      UPDATE sync_log SET rollback_status = 'used'
+      WHERE id = ${logId} AND rollback_status = 'available'
+    `
+    return result.count > 0
+  },
+
+  async resetRollbackToAvailable(logId: number): Promise<void> {
+    await sql`UPDATE sync_log SET rollback_status = 'available' WHERE id = ${logId}`
+  },
+
+  async createRollbackRun(jobId: string, rollbackOf: number, result: RollbackResult): Promise<number> {
+    const [{ id }] = await sql<[{ id: string }]>`
+      INSERT INTO sync_log (
+        job_id, status, started_at, ended_at,
+        files_copied, files_deleted, files_skipped, files_errored,
+        bytes_transferred, errors,
+        is_rollback, rollback_of, rollback_status
+      ) VALUES (
+        ${jobId},
+        ${result.filesErrored > 0 ? 'error' : 'completed'},
+        ${result.startedAt}, ${result.endedAt},
+        ${result.filesRestored}, ${result.filesDeleted}, 0, ${result.filesErrored},
+        0, ${JSON.stringify(result.errors)},
+        true, ${rollbackOf}, 'none'
+      ) RETURNING id::text
+    `
+    return parseInt(id)
   },
 }

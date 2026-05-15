@@ -10,7 +10,7 @@ declare global {
   }
 }
 
-async function resolveToken(token: string): Promise<string | null> {
+export async function resolveToken(token: string): Promise<string | null> {
   const jwtPayload = verifyJwt(token)
   if (jwtPayload) return jwtPayload.userId
   return (await usersDb.getUserIdByToken(hashToken(token))) ?? null
@@ -30,11 +30,43 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
 export async function authFromWsRequest(req: IncomingMessage): Promise<string | null> {
   try {
-    const url   = new URL(req.url ?? '/', 'http://localhost')
-    const token = url.searchParams.get('token')
+    const token = wsTokenFromRequest(req)
     if (!token) return null
     return resolveToken(token)
   } catch {
     return null
   }
+}
+
+export function wsTokenFromRequest(req: IncomingMessage): string | null {
+  const authorization = req.headers.authorization
+  if (authorization?.startsWith('Bearer ')) return authorization.slice(7)
+
+  const protocolToken = tokenFromWsProtocol(req.headers['sec-websocket-protocol'])
+  if (protocolToken) return protocolToken
+
+  if (process.env.ALLOW_LEGACY_WS_QUERY_TOKEN === 'true') {
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    return url.searchParams.get('token')
+  }
+
+  return null
+}
+
+function tokenFromWsProtocol(value: string | string[] | undefined): string | null {
+  const protocols = Array.isArray(value)
+    ? value.flatMap((entry) => entry.split(','))
+    : (value ?? '').split(',')
+
+  for (const raw of protocols) {
+    const protocol = raw.trim()
+    if (!protocol.startsWith('auth.')) continue
+    try {
+      return Buffer.from(protocol.slice('auth.'.length), 'base64url').toString('utf8')
+    } catch {
+      return null
+    }
+  }
+
+  return null
 }

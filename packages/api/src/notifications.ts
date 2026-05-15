@@ -66,6 +66,7 @@ function notificationText(job: Job, event: NotificationEvent): string {
       `Job: ${job.name}`,
       `Status: completed`,
       `Copied: ${event.result.filesCopied}`,
+      `Deleted: ${event.result.filesDeleted ?? 0}`,
       `Skipped: ${event.result.filesSkipped}`,
       `Errors: ${event.result.filesErrored}`,
       `Bytes transferred: ${event.result.bytesTransferred}`,
