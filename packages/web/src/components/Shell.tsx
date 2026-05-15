@@ -34,6 +34,14 @@ export default function Shell({ children }: ShellProps) {
             >
               Devices
             </NavLink>
+            <NavLink
+              to="/download"
+              className={({ isActive }) =>
+                isActive ? 'font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+              }
+            >
+              Download
+            </NavLink>
           </nav>
         </div>
 
@@ -42,7 +50,10 @@ export default function Shell({ children }: ShellProps) {
             <span
               className={`inline-block size-2 rounded-full ${agentCount > 0 ? 'bg-green-500' : 'bg-red-500'}`}
             />
-            {agentCount > 0 ? `${agentCount} agent${agentCount > 1 ? 's' : ''} online` : 'No agent connected'}
+            {agentCount > 0
+              ? `${agentCount} agent${agentCount > 1 ? 's' : ''} online`
+              : <><span>No agent connected</span><NavLink to="/download" className="ml-1.5 underline underline-offset-2 hover:text-foreground">Get the app ↗</NavLink></>
+            }
           </TooltipTrigger>
           <TooltipContent>
             {agentCount > 0 ? hostnames.join(', ') : 'No agents connected'}
