@@ -69,20 +69,30 @@ export interface SyncProgress {
 //  Agent connects to ws://host:port/agent
 // ─────────────────────────────────────────────
 
+export interface DirEntry {
+  name:        string
+  type:        'file' | 'directory'
+  path:        string
+  size?:       number
+  modifiedAt?: number
+}
+
 export type AgentToServer =
-  | { type: 'register';     deviceId: string; hostname: string; platform: string }
-  | { type: 'job:trigger';  jobId: string; reason: 'watch'; path?: string }
-  | { type: 'job:started';  jobId: string }
-  | { type: 'job:progress'; progress: SyncProgress }
-  | { type: 'job:complete'; result: SyncResult }
+  | { type: 'register';      deviceId: string; hostname: string; platform: string }
+  | { type: 'job:trigger';   jobId: string; reason: 'watch'; path?: string }
+  | { type: 'job:started';   jobId: string }
+  | { type: 'job:progress';  progress: SyncProgress }
+  | { type: 'job:complete';  result: SyncResult }
   | { type: 'job:cancelled'; jobId: string }
-  | { type: 'job:error';    jobId: string; error: string }
+  | { type: 'job:error';     jobId: string; error: string }
+  | { type: 'browse:result'; requestId: string; path: string; entries: DirEntry[]; error?: string }
 
 export type ServerToAgent =
-  | { type: 'registered';  ok: true }
-  | { type: 'jobs:watch';  jobs: Job[] }
-  | { type: 'job:run';     job: Job }
-  | { type: 'job:cancel';  jobId: string }
+  | { type: 'registered';      ok: true }
+  | { type: 'jobs:watch';      jobs: Job[] }
+  | { type: 'job:run';         job: Job }
+  | { type: 'job:cancel';      jobId: string }
+  | { type: 'browse:request';  requestId: string; path: string }
 
 // ─────────────────────────────────────────────
 //  WebSocket protocol: Browser ↔ API Server
@@ -90,13 +100,13 @@ export type ServerToAgent =
 // ─────────────────────────────────────────────
 
 export type ServerToBrowser =
-  | { type: 'agent:online';  deviceId: string; hostname: string }
-  | { type: 'agent:offline'; deviceId: string }
-  | { type: 'job:status';    jobId: string; status: JobStatus }
-  | { type: 'job:progress';  progress: SyncProgress }
-  | { type: 'job:complete';  result: SyncResult }
-  | { type: 'job:cancelled'; jobId: string }
-  | { type: 'job:error';     jobId: string; error: string }
+  | { type: 'agent:online';   deviceId: string; hostname: string }
+  | { type: 'agent:offline';  deviceId: string }
+  | { type: 'job:status';     jobId: string; status: JobStatus }
+  | { type: 'job:progress';   progress: SyncProgress }
+  | { type: 'job:complete';   result: SyncResult }
+  | { type: 'job:cancelled';  jobId: string }
+  | { type: 'job:error';      jobId: string; error: string }
 
 // ─────────────────────────────────────────────
 //  Phase A: Connect / Relay protocol

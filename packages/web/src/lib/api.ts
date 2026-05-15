@@ -1,4 +1,4 @@
-import type { Job } from '../types'
+import type { Job, DirEntry } from '../types'
 import { getToken, clearToken } from './auth'
 
 const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001'
@@ -94,4 +94,9 @@ export function createDevice(name: string): Promise<{ id: string; name: string; 
 
 export function deleteDevice(id: string): Promise<void> {
   return apiFetch(`/api/devices/${id}`, { method: 'DELETE' })
+}
+
+export function browseDir(deviceId: string, path: string): Promise<{ path: string; entries: DirEntry[] }> {
+  const qs = new URLSearchParams({ deviceId, path })
+  return apiFetch(`/api/browse?${qs}`)
 }

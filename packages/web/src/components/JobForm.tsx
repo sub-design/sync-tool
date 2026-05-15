@@ -18,7 +18,6 @@ import EndpointPicker from '@/components/EndpointPicker'
 import * as api from '@/lib/api'
 import { validateEndpoint } from '@/lib/backend'
 import { describeCron } from '@/lib/cron'
-import { useWsStore } from '@/lib/ws'
 import type { Job } from '../types'
 
 function isCronValid(expr: string): boolean {
@@ -79,8 +78,6 @@ export interface JobFormProps {
 }
 
 export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
-  const agentsOnline = useWsStore(s => s.agentsOnline)
-  const agents = [...agentsOnline.entries()]
   const [optionsOpen, setOptionsOpen] = useState(false)
 
   const {
@@ -179,6 +176,8 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
                 label={isSync ? 'Left Folder' : 'Source Folder'}
                 value={field.value}
                 onChange={field.onChange}
+                deviceId={watch('sourceDeviceId') || undefined}
+                onDeviceChange={id => setValue('sourceDeviceId', id ?? '', { shouldValidate: true })}
               />
             )}
           />
@@ -251,6 +250,8 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
                 label={isSync ? 'Right Folder' : 'Destination Folder'}
                 value={field.value}
                 onChange={field.onChange}
+                deviceId={watch('destinationDeviceId') || undefined}
+                onDeviceChange={id => setValue('destinationDeviceId', id ?? '', { shouldValidate: true })}
               />
             )}
           />
@@ -378,35 +379,6 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
                 <Input id="jf-notify-webhook" placeholder="https://example.com/webhook" {...register('notifyWebhookUrl')} />
                 {errors.notifyWebhookUrl && <p className="text-xs text-destructive">{errors.notifyWebhookUrl.message}</p>}
               </div>
-            </div>
-
-            {/* Agents */}
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="jf-source-device">Source agent</Label>
-                <Input
-                  id="jf-source-device"
-                  list="jf-agents"
-                  placeholder="optional device id"
-                  className="font-mono text-sm"
-                  {...register('sourceDeviceId')}
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="jf-destination-device">Destination agent</Label>
-                <Input
-                  id="jf-destination-device"
-                  list="jf-agents"
-                  placeholder="optional device id"
-                  className="font-mono text-sm"
-                  {...register('destinationDeviceId')}
-                />
-              </div>
-              <datalist id="jf-agents">
-                {agents.map(([deviceId, hostname]) => (
-                  <option key={deviceId} value={deviceId}>{hostname}</option>
-                ))}
-              </datalist>
             </div>
 
             {/* Schedule */}

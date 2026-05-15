@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Eye, EyeOff, Folder, HardDrive, Lock, Network, Server, Terminal } from 'lucide-react'
+import { Eye, EyeOff, Folder, HardDrive, Lock, Network, Server, Terminal, Monitor } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,13 +11,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { FolderPickerDialog } from '@/components/FolderPickerDialog'
+import { useWsStore } from '@/lib/ws'
 import { BACKEND_DEFAULTS, type BackendType, type EndpointConfig } from '../types'
 import { buildBackendUrl, parseBackendUrl } from '@/lib/backend'
 
 interface EndpointPickerProps {
-  label: string
-  value: string
-  onChange: (url: string) => void
+  label:          string
+  value:          string
+  onChange:       (url: string) => void
+  deviceId?:      string
+  onDeviceChange?: (deviceId: string | undefined) => void
 }
 
 const BACKEND_OPTIONS = [
@@ -47,10 +51,12 @@ function parseFolderPath(p: string): { name: string; breadcrumbs: string } {
   return { name, breadcrumbs: crumbs || sep }
 }
 
-export default function EndpointPicker({ label, value, onChange }: EndpointPickerProps) {
+export default function EndpointPicker({ label, value, onChange, deviceId, onDeviceChange }: EndpointPickerProps) {
+  const agentsOnline = useWsStore(s => s.agentsOnline)
   const [config, setConfig] = useState(() => parseBackendUrl(value))
   const [showPassword, setShowPassword] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -124,11 +130,13 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
     }
   }
 
-  const isRemote  = config.type !== 'local'
-  const usesPort  = config.type === 'sftp' || config.type === 'ftp' || config.type === 'ftps'
-  const usesCreds = isRemote && config.type !== 'nfs'
-  const hasLocal  = !isRemote && !!config.localPath
+  const isRemote   = config.type !== 'local'
+  const usesPort   = config.type === 'sftp' || config.type === 'ftp' || config.type === 'ftps'
+  const usesCreds  = isRemote && config.type !== 'nfs'
+  const hasLocal   = !isRemote && !!config.localPath
   const currentOpt = BACKEND_OPTIONS.find(o => o.type === config.type)!
+  const agentsList = [...agentsOnline.entries()]
+  const selectedHostname = deviceId ? (agentsOnline.get(deviceId) ?? deviceId) : null
 
   return (
     <div className="flex flex-col gap-3 h-full">
@@ -157,6 +165,7 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
       {/* Local: folder picker */}
       {!isRemote && (
         <>
+          {/* Hidden file input for local drag-and-drop fallback */}
           <input
             ref={fileInputRef}
             type="file"
@@ -170,8 +179,9 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
             /* Selected state */
             <SelectedFolderPanel
               path={config.localPath}
+              deviceName={selectedHostname}
               onPathChange={path => updateConfig({ localPath: path })}
-              onBrowse={handleBrowse}
+              onBrowse={() => setPickerOpen(true)}
               onDragOver={handleDragOver}
               onDragEnter={handleDragOver}
               onDragLeave={handleDragLeave}
@@ -195,15 +205,40 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
                 <span className="absolute inset-0 flex items-end justify-center pb-2.5 text-muted-foreground/35 font-bold text-2xl">?</span>
               </div>
               <p className="font-semibold text-sm text-center text-foreground">{label}</p>
-              <Button type="button" onClick={handleBrowse}>
-                Browse Folders
-              </Button>
+
+              {/* Remote browse via agent */}
+              {agentsList.length > 0 ? (
+                <Button type="button" onClick={() => setPickerOpen(true)}>
+                  Browse Folders
+                </Button>
+              ) : (
+                <div className="flex flex-col items-center gap-1">
+                  <Button type="button" onClick={handleBrowse} variant="outline">
+                    Browse Local
+                  </Button>
+                  <p className="text-xs text-muted-foreground text-center">
+                    No agents online — local browser only
+                  </p>
+                </div>
+              )}
+
               <div className="flex flex-col items-center gap-0.5 text-xs text-muted-foreground">
                 <span>or</span>
                 <span>Drag and drop a folder here</span>
               </div>
             </div>
           )}
+
+          <FolderPickerDialog
+            open={pickerOpen}
+            onOpenChange={setPickerOpen}
+            initialDeviceId={deviceId}
+            initialPath={config.localPath || undefined}
+            onSelect={(selectedDeviceId, selectedPath) => {
+              updateConfig({ localPath: selectedPath })
+              onDeviceChange?.(selectedDeviceId)
+            }}
+          />
         </>
       )}
 
@@ -299,18 +334,20 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
 }
 
 interface SelectedFolderPanelProps {
-  path: string
+  path:         string
+  deviceName:   string | null
   onPathChange: (path: string) => void
-  onBrowse: () => void
-  onDragOver: (e: React.DragEvent) => void
-  onDragEnter: (e: React.DragEvent) => void
-  onDragLeave: (e: React.DragEvent) => void
-  onDrop: (e: React.DragEvent) => void
-  isDragOver: boolean
+  onBrowse:     () => void
+  onDragOver:   (e: React.DragEvent) => void
+  onDragEnter:  (e: React.DragEvent) => void
+  onDragLeave:  (e: React.DragEvent) => void
+  onDrop:       (e: React.DragEvent) => void
+  isDragOver:   boolean
 }
 
 function SelectedFolderPanel({
   path,
+  deviceName,
   onPathChange,
   onBrowse,
   onDragOver,
@@ -342,6 +379,12 @@ function SelectedFolderPanel({
           <p className="font-semibold text-sm text-foreground">{name}</p>
           {breadcrumbs && (
             <p className="text-xs text-muted-foreground">{breadcrumbs}</p>
+          )}
+          {deviceName && (
+            <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
+              <Monitor size={11} />
+              <span>{deviceName}</span>
+            </div>
           )}
         </div>
         <Button type="button" variant="outline" size="sm" onClick={onBrowse}>

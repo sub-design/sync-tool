@@ -6,10 +6,10 @@ import { initDb, jobsDb, logDb } from './db'
 import { createJobsRouter } from './routes/jobs'
 import { createAuthRouter } from './routes/auth'
 import { createDevicesRouter } from './routes/devices'
-import { authFromWsRequest } from './middleware/requireAuth'
+import { authFromWsRequest, requireAuth } from './middleware/requireAuth'
 import { notifyJob } from './notifications'
 import { schedulerPollMs, shouldRunNow } from './scheduler'
-import type { AgentToServer, ServerToAgent, ServerToBrowser, Job } from '@sync-tool/shared'
+import type { AgentToServer, ServerToAgent, ServerToBrowser, Job, DirEntry } from '@sync-tool/shared'
 
 const PORT = parseInt(process.env.PORT ?? '3001', 10)
 
@@ -50,6 +50,14 @@ interface AgentConn {
 }
 
 const agents = new Map<string, AgentConn>()
+
+// ── Pending browse requests ────────────────────────────────────────────────────
+
+interface BrowsePending {
+  resolve: (result: { path: string; entries: DirEntry[]; error?: string }) => void
+  timer:   ReturnType<typeof setTimeout>
+}
+const browsePending = new Map<string, BrowsePending>()
 
 function sendToAgent(deviceId: string, msg: ServerToAgent): boolean {
   const conn = agents.get(deviceId)
@@ -185,6 +193,16 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: st
         console.error(`[api] Job ${msg.jobId} failed: ${msg.error}`)
         break
       }
+
+      case 'browse:result': {
+        const pending = browsePending.get(msg.requestId)
+        if (pending) {
+          clearTimeout(pending.timer)
+          browsePending.delete(msg.requestId)
+          pending.resolve({ path: msg.path, entries: msg.entries, error: msg.error })
+        }
+        break
+      }
     }
   })
 
@@ -230,6 +248,39 @@ app.use('/api/jobs',    createJobsRouter(async (msg) => {
     broadcastToBrowsers({ type: 'job:cancelled', jobId: msg.jobId })
   }
 }, () => { void broadcastWatchConfig() }))
+
+app.get('/api/browse', requireAuth, async (req, res) => {
+  const userId   = req.userId
+  const deviceId = req.query.deviceId as string | undefined
+  const browsePath = (req.query.path as string | undefined) ?? '~'
+
+  // Find target agent (must belong to same user)
+  const target = deviceId
+    ? agents.get(deviceId)
+    : [...agents.values()].find(a => a.userId === userId)
+
+  if (!target || target.userId !== userId) {
+    res.status(404).json({ error: 'Agent not found or offline' })
+    return
+  }
+
+  const requestId = `browse_${Date.now()}_${Math.random().toString(36).slice(2)}`
+
+  const result = await new Promise<{ path: string; entries: DirEntry[]; error?: string }>((resolve) => {
+    const timer = setTimeout(() => {
+      browsePending.delete(requestId)
+      resolve({ path: browsePath, entries: [], error: 'Agent did not respond in time' })
+    }, 10_000)
+    browsePending.set(requestId, { resolve, timer })
+    target.ws.send(JSON.stringify({ type: 'browse:request', requestId, path: browsePath } satisfies ServerToAgent))
+  })
+
+  if (result.error) {
+    res.status(502).json({ error: result.error })
+    return
+  }
+  res.json({ path: result.path, entries: result.entries })
+})
 
 app.get('/api/health', async (_req, res) => {
   res.json({

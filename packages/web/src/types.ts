@@ -1,3 +1,5 @@
+export type { DirEntry } from '@sync-tool/shared'
+
 export type JobDirection      = 'ltr' | 'rtl' | 'bidir'
 export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'cancelled' | 'error'
 export type TransferMode     = 'full' | 'delta' | 'auto'

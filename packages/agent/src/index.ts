@@ -1,4 +1,6 @@
 import os from 'os'
+import fs from 'fs'
+import path from 'path'
 import { WebSocket } from 'ws'
 import { v4 as uuid } from 'uuid'
 import pLimit from 'p-limit'
@@ -8,7 +10,7 @@ import { RelayClient } from './relayClient'
 import { canRunRemoteDelta, isRemoteDeltaJob, registerRemoteDeltaHandlers, runRemoteDeltaSync } from './delta/remote'
 import { stateDb } from './state'
 import { JobWatcher } from './watch'
-import type { AgentToServer, ServerToAgent, Job } from '@sync-tool/shared'
+import type { AgentToServer, ServerToAgent, Job, DirEntry } from '@sync-tool/shared'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -96,6 +98,10 @@ function connect() {
           console.log(`[agent] Cancel requested for ${msg.jobId}`)
           runningJobs.get(msg.jobId)?.abort()
         }
+        break
+
+      case 'browse:request':
+        await handleBrowse(ws, msg.requestId, msg.path)
         break
     }
   })
@@ -189,6 +195,46 @@ async function runLocalSync(job: Job, onProgress: (progress: any) => void, signa
     onProgress,
     signal,
   )
+}
+
+// ── Directory browse ──────────────────────────────────────────────────────────
+
+async function handleBrowse(ws: WebSocket, requestId: string, rawPath: string) {
+  const resolved = rawPath === '~' || rawPath === ''
+    ? os.homedir()
+    : rawPath.startsWith('~/')
+      ? path.join(os.homedir(), rawPath.slice(2))
+      : rawPath
+
+  try {
+    const dirents = await fs.promises.readdir(resolved, { withFileTypes: true })
+    const entries: DirEntry[] = await Promise.all(
+      dirents.map(async (d) => {
+        const full = path.join(resolved, d.name)
+        let size: number | undefined
+        let modifiedAt: number | undefined
+        try {
+          const stat = await fs.promises.stat(full)
+          size       = stat.size
+          modifiedAt = stat.mtimeMs
+        } catch { /* ignore stat errors for individual entries */ }
+        return {
+          name: d.name,
+          type: d.isDirectory() ? 'directory' : 'file',
+          path: full,
+          size,
+          modifiedAt,
+        } satisfies DirEntry
+      })
+    )
+    entries.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    send(ws, { type: 'browse:result', requestId, path: resolved, entries })
+  } catch (err: any) {
+    send(ws, { type: 'browse:result', requestId, path: resolved, entries: [], error: err.message })
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
