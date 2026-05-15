@@ -1,34 +1,10 @@
-import { useEffect, useState } from 'react'
-import { Apple, Download, ArrowRight, Shield, FolderOpen, Zap, Loader2 } from 'lucide-react'
+import { Apple, Download, ArrowRight, Shield, FolderOpen, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
-const RELEASES_API = 'https://api.github.com/repos/sub-design/sync-tool/releases/latest'
-
-interface ReleaseInfo {
-  version: string
-  dmgUrl:  string
-}
-
-function useLatestRelease(): ReleaseInfo | null {
-  const [info, setInfo] = useState<ReleaseInfo | null>(null)
-
-  useEffect(() => {
-    fetch(RELEASES_API)
-      .then(r => r.json())
-      .then(data => {
-        const dmg = (data.assets as Array<{ name: string; browser_download_url: string }>)
-          .find(a => a.name.endsWith('-arm64.dmg'))
-        if (dmg) setInfo({ version: data.tag_name.replace(/^v/, ''), dmgUrl: dmg.browser_download_url })
-      })
-      .catch(() => {})
-  }, [])
-
-  return info
-}
+const LATEST_VERSION = '0.2.1'
+const DMG_URL = `https://github.com/sub-design/sync-tool/releases/download/v${LATEST_VERSION}/Sync-Tool-${LATEST_VERSION}-arm64.dmg`
 
 export default function DownloadPage() {
-  const release = useLatestRelease()
-
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
@@ -55,22 +31,14 @@ export default function DownloadPage() {
           </p>
         </div>
 
-        {/* Download button */}
-        {release ? (
-          <a href={release.dmgUrl}>
-            <Button size="lg" className="gap-2 px-8 text-base h-12">
-              <Download size={18} />
-              Download for macOS
-            </Button>
-          </a>
-        ) : (
-          <Button size="lg" className="gap-2 px-8 text-base h-12" disabled>
-            <Loader2 size={18} className="animate-spin" />
-            Loading…
+        <a href={DMG_URL}>
+          <Button size="lg" className="gap-2 px-8 text-base h-12">
+            <Download size={18} />
+            Download for macOS
           </Button>
-        )}
+        </a>
         <p className="text-xs text-muted-foreground">
-          {release ? `Version ${release.version}` : '—'} · Apple Silicon · macOS 13+
+          Version {LATEST_VERSION} · Apple Silicon · macOS 13+
         </p>
 
         {/* Install steps */}
