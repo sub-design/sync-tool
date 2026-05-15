@@ -405,10 +405,10 @@ export function FolderPickerDialog({
         </div>
 
         {/* ── Body: sidebar + main ── */}
-        <div className="flex flex-1 min-h-0">
+        <div className="flex flex-1 min-h-0 overflow-hidden">
 
           {/* Sidebar */}
-          <div className="w-52 shrink-0 border-r border-border bg-muted/20">
+          <div className="w-52 shrink-0 border-r border-border bg-muted/20 overflow-hidden">
             <ScrollArea className="h-full">
               {deviceId ? (
                 <>
@@ -427,21 +427,19 @@ export function FolderPickerDialog({
           </div>
 
           {/* Main listing */}
-          <div className="flex-1 min-w-0 flex flex-col">
-            <ScrollArea className="flex-1">
-              <div className="p-2">
-                {deviceId ? (
-                  <FolderList
-                    deviceId={deviceId}
-                    path={currentPath}
-                    onNavigate={navigate}
-                  />
-                ) : (
-                  <div className="flex flex-1 items-center justify-center h-full text-sm text-muted-foreground pt-20">
-                    Select a device to browse
-                  </div>
-                )}
-              </div>
+          <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+            <ScrollArea className="flex-1 h-0">
+              {deviceId ? (
+                <FolderList
+                  deviceId={deviceId}
+                  path={currentPath}
+                  onNavigate={navigate}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-40 text-sm text-muted-foreground">
+                  Select a device to browse
+                </div>
+              )}
             </ScrollArea>
 
             {/* Double-click hint */}
