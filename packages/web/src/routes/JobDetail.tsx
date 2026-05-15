@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Loader2, MoreHorizontal, Pencil, Play, Square } from 'lucide-react'
+import { ArrowLeft, Clock, Loader2, MoreHorizontal, Pencil, Play, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +18,7 @@ import SyncLogTable, { type SyncLogEntry } from '@/components/SyncLogTable'
 import JobForm from '@/components/JobForm'
 import { useWsStore, subscribe } from '@/lib/ws'
 import { formatRelative, formatBytes } from '@/lib/format'
+import { describeCron } from '@/lib/cron'
 import * as api from '@/lib/api'
 import type { JobDirection, JobStatus } from '../types'
 
@@ -156,10 +157,16 @@ export default function JobDetail() {
                 </div>
 
                 {/* Row 2: paths + direction */}
-                <div className="flex gap-12 text-sm text-muted-foreground">
+                <div className="flex flex-wrap gap-x-12 gap-y-1 text-sm text-muted-foreground">
                   <span>Source: <span className="font-mono">{job.source}</span></span>
                   <span>Destination: <span className="font-mono">{job.destination}</span></span>
                   <span>Direction: {DIRECTION_LABEL[job.direction]}</span>
+                  {job.schedule && (
+                    <span className="flex items-center gap-1">
+                      <Clock size={12} />
+                      <span title={job.schedule}>{describeCron(job.schedule)}</span>
+                    </span>
+                  )}
                 </div>
 
                 {/* Row 3: status + last run + error */}

@@ -1,12 +1,14 @@
 import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ArrowLeftRight, ArrowRight, Loader2, Play } from 'lucide-react'
+import { ArrowLeft, ArrowLeftRight, ArrowRight, Clock, Loader2, Play } from 'lucide-react'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useWsStore } from '@/lib/ws'
 import { formatRelative } from '@/lib/format'
+import { describeCron } from '@/lib/cron'
 import * as api from '@/lib/api'
 import type { Job, JobDirection, JobStatus } from '../types'
 
@@ -36,10 +38,23 @@ export default function JobCard({ job }: { job: Job }) {
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="font-medium">{job.name}</CardTitle>
-          <Badge variant="outline" className="flex shrink-0 items-center gap-1">
-            <Icon className="size-3" />
-            {label}
-          </Badge>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {job.schedule && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="secondary" className="flex items-center gap-1 font-normal cursor-default">
+                    <Clock className="size-3" />
+                    {job.schedule}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>{describeCron(job.schedule)}</TooltipContent>
+              </Tooltip>
+            )}
+            <Badge variant="outline" className="flex items-center gap-1">
+              <Icon className="size-3" />
+              {label}
+            </Badge>
+          </div>
         </div>
       </CardHeader>
 

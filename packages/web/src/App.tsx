@@ -6,6 +6,7 @@ import Dashboard from './routes/Dashboard'
 import JobDetail from './routes/JobDetail'
 import Devices from './routes/Devices'
 import Login from './routes/Login'
+import Download from './routes/Download'
 
 const queryClient = new QueryClient()
 
@@ -20,6 +21,7 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/download" element={<Download />} />
             <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />
             <Route path="/jobs/:id" element={<RequireAuth><JobDetail /></RequireAuth>} />
             <Route path="/devices" element={<RequireAuth><Devices /></RequireAuth>} />
