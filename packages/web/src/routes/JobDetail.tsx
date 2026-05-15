@@ -61,7 +61,7 @@ export default function JobDetail() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [rollbackEntry, setRollbackEntry] = useState<SyncLogEntry | null>(null)
   const [rollbackPreview, setRollbackPreview] = useState<RollbackPreview | null>(null)
-  const [rollbackLoading, setRollbackLoading] = useState(false)
+  const [_rollbackLoading, setRollbackLoading] = useState(false)
   const [rollbackingLogId, setRollbackingLogId] = useState<string | undefined>()
 
   const { data: job } = useQuery({
