@@ -101,7 +101,7 @@ function isWatchableLocalPath(value: string): boolean {
 
 export function shouldIgnoreWatchPath(candidatePath: string): boolean {
   const normalized = candidatePath.split(path.sep).join('/')
-  return normalized.includes('/_gsdata_/')
+  return normalized.includes('/_syncdata_/')
     || normalized.endsWith('.sync-tool-part')
     || normalized.includes('.sync-tool-part.')
 }

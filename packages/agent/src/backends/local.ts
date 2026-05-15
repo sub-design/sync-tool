@@ -17,7 +17,7 @@ export const localBackend: StorageBackend = {
       }
 
       for (const item of items) {
-        if (item.name === '_gsdata_') continue  // skip our own metadata directory
+        if (item.name === '_syncdata_') continue  // skip our own metadata directory
 
         const abs = path.join(currentDir, item.name)
         const rel = path.relative(rootPath, abs)
@@ -90,8 +90,8 @@ export const localBackend: StorageBackend = {
   },
 
   /**
-   * Safe delete: moves file to _gsdata_/_saved_/ instead of hard-deleting.
-   * User can recover it manually. GoodSync does the same.
+   * Safe delete: moves file to _syncdata_/_saved_/ instead of hard-deleting.
+   * User can recover files manually from that directory.
    */
   async delete(filePath: string): Promise<void> {
     const dir      = path.dirname(filePath)
@@ -99,7 +99,7 @@ export const localBackend: StorageBackend = {
     const basename = path.basename(filePath, ext)
     const ts       = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
 
-    const savedDir  = path.join(dir, '_gsdata_', '_saved_')
+    const savedDir  = path.join(dir, '_syncdata_', '_saved_')
     const savedPath = path.join(savedDir, `${basename}_${ts}${ext}`)
 
     await fs.promises.mkdir(savedDir, { recursive: true })
@@ -116,7 +116,7 @@ export const localBackend: StorageBackend = {
       }
     }
 
-    console.log(`[local] Safe-deleted → _gsdata_/_saved_/${path.basename(savedPath)}`)
+    console.log(`[local] Safe-deleted → _syncdata_/_saved_/${path.basename(savedPath)}`)
   },
 
   async move(fromPath: string, toPath: string, meta: FileMeta): Promise<void> {

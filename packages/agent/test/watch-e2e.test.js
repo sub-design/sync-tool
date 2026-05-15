@@ -320,5 +320,5 @@ function sleep(ms) {
 }
 
 function visibleFiles(files) {
-  return files.filter((file) => file !== '_gsdata_').sort()
+  return files.filter((file) => file !== '_syncdata_').sort()
 }

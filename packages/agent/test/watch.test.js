@@ -36,7 +36,7 @@ test('watchPathsForJob ignores disabled jobs and non-local URLs', () => {
 })
 
 test('shouldIgnoreWatchPath ignores sync metadata and partial files', () => {
-  assert.equal(shouldIgnoreWatchPath(path.join('/tmp/root', '_gsdata_', '_saved_', 'file.txt')), true)
+  assert.equal(shouldIgnoreWatchPath(path.join('/tmp/root', '_syncdata_', '_saved_', 'file.txt')), true)
   assert.equal(shouldIgnoreWatchPath('/tmp/root/file.sync-tool-part.txt'), true)
   assert.equal(shouldIgnoreWatchPath('/tmp/root/file.sync-tool-part'), true)
   assert.equal(shouldIgnoreWatchPath('/tmp/root/file.txt'), false)

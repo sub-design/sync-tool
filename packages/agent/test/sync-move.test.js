@@ -278,7 +278,7 @@ function stateEntry(srcStat, dstStat, checksum) {
 }
 
 function visibleFiles(files) {
-  return files.filter((file) => file !== '_gsdata_').sort()
+  return files.filter((file) => file !== '_syncdata_').sort()
 }
 
 function sha256(content) {

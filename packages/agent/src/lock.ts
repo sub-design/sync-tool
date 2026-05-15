@@ -1,13 +1,13 @@
 /**
  * Directory lock management
  *
- * Before syncing, we create _gsdata_/lock inside the source directory.
+ * Before syncing, we create _syncdata_/lock inside the source directory.
  * This prevents two jobs from syncing the same folder simultaneously.
  *
  * The lock contains our PID so stale locks (from crashed processes) are
  * automatically detected and removed.
  *
- * Analogous to GoodSync's _gsdata_/lock behaviour.
+ * Stale locks (from crashed processes) are detected by PID check and removed automatically.
  */
 
 import fs   from 'fs'
@@ -86,7 +86,7 @@ export function isLocalPath(p: string): boolean {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getLockPath(dirPath: string): string {
-  return path.join(dirPath, '_gsdata_', 'lock')
+  return path.join(dirPath, '_syncdata_', 'lock')
 }
 
 function isPidAlive(pid: number): boolean {
