@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react'
 import {
   ChevronRight, ChevronDown, Folder, FolderOpen,
   HardDrive, ChevronLeft, Home, Loader2, AlertCircle,
-  Check, Monitor
+  Check, Monitor, Download, FileText, Image, Film, Music
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -15,6 +15,44 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { useBrowse } from '@/hooks/useBrowse'
 import { useWsStore } from '@/lib/ws'
 import type { DirEntry } from '../types'
+
+// ── Favorites sidebar section ──────────────────────────────────────────────────
+
+const FAVORITES = [
+  { label: 'Home',      path: '~',            Icon: Home     },
+  { label: 'Desktop',   path: '~/Desktop',    Icon: Monitor  },
+  { label: 'Documents', path: '~/Documents',  Icon: FileText },
+  { label: 'Downloads', path: '~/Downloads',  Icon: Download },
+  { label: 'Pictures',  path: '~/Pictures',   Icon: Image    },
+  { label: 'Movies',    path: '~/Movies',     Icon: Film     },
+  { label: 'Music',     path: '~/Music',      Icon: Music    },
+]
+
+function FavoritesSection({ activePath, onNavigate }: { activePath: string; onNavigate: (p: string) => void }) {
+  return (
+    <div className="px-2 pt-2 pb-1">
+      <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 select-none">
+        Favorites
+      </p>
+      {FAVORITES.map(({ label, path, Icon }) => (
+        <button
+          key={path}
+          className={[
+            'w-full flex items-center gap-2 px-2 py-1 rounded-sm text-sm transition-colors',
+            activePath === path
+              ? 'bg-primary/15 text-primary font-medium'
+              : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+          ].join(' ')}
+          onClick={() => onNavigate(path)}
+        >
+          <Icon size={14} className="shrink-0" />
+          <span className="truncate">{label}</span>
+        </button>
+      ))}
+      <div className="mt-2 mb-1 mx-2 h-px bg-border" />
+    </div>
+  )
+}
 
 // ── Tree sidebar ───────────────────────────────────────────────────────────────
 
@@ -106,21 +144,7 @@ function FolderTree({ deviceId, rootPath, activePath, onNavigate }: FolderTreePr
   )
 
   return (
-    <div className="flex flex-col gap-0.5 py-1">
-      {/* Root entry itself */}
-      <div
-        className={[
-          'flex items-center gap-1.5 py-1 px-2 rounded-sm cursor-pointer select-none text-sm',
-          activePath === rootPath
-            ? 'bg-primary/15 text-primary font-medium'
-            : 'hover:bg-accent/50 text-muted-foreground hover:text-foreground',
-        ].join(' ')}
-        onClick={() => onNavigate(rootPath)}
-      >
-        <HardDrive size={15} className="shrink-0" />
-        <span className="truncate font-medium">Home</span>
-      </div>
-
+    <div className="flex flex-col gap-0.5 px-2 pb-2">
       {subdirs.map(entry => (
         <TreeNode
           key={entry.path}
@@ -387,12 +411,15 @@ export function FolderPickerDialog({
           <div className="w-52 shrink-0 border-r border-border bg-muted/20">
             <ScrollArea className="h-full">
               {deviceId ? (
-                <FolderTree
-                  deviceId={deviceId}
-                  rootPath="~"
-                  activePath={currentPath}
-                  onNavigate={navigate}
-                />
+                <>
+                  <FavoritesSection activePath={currentPath} onNavigate={navigate} />
+                  <FolderTree
+                    deviceId={deviceId}
+                    rootPath="~"
+                    activePath={currentPath}
+                    onNavigate={navigate}
+                  />
+                </>
               ) : (
                 <div className="p-3 text-xs text-muted-foreground">No device selected</div>
               )}

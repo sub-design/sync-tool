@@ -116,18 +116,12 @@ export default function EndpointPicker({ label, value, onChange, deviceId, onDev
     e.stopPropagation()
     setIsDragOver(false)
 
-    // Electron: dragged folder exposes real path via files[0].path
+    // Electron exposes the real filesystem path via files[0].path
     const file = e.dataTransfer.files[0] as (File & { path?: string }) | undefined
     if (file?.path) {
       updateConfig({ localPath: file.path })
-      return
     }
-
-    // Browser fallback: use directory name from entry
-    const entry = e.dataTransfer.items[0]?.webkitGetAsEntry()
-    if (entry?.isDirectory) {
-      updateConfig({ localPath: entry.name })
-    }
+    // In a regular browser the full path is not accessible — ignore the drop
   }
 
   const isRemote   = config.type !== 'local'
@@ -222,10 +216,6 @@ export default function EndpointPicker({ label, value, onChange, deviceId, onDev
                 </div>
               )}
 
-              <div className="flex flex-col items-center gap-0.5 text-xs text-muted-foreground">
-                <span>or</span>
-                <span>Drag and drop a folder here</span>
-              </div>
             </div>
           )}
 
