@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import EndpointPicker from '@/components/EndpointPicker'
 import * as api from '@/lib/api'
 import { validateEndpoint } from '@/lib/backend'
+import { describeCron } from '@/lib/cron'
 import { useWsStore } from '@/lib/ws'
 import type { Job } from '../types'
 
@@ -23,6 +24,7 @@ const schema = z.object({
   destination: z.string().min(1).refine(validateEndpoint, { message: 'Invalid path or connection URL' }),
   direction:   z.enum(['ltr', 'bidir', 'rtl']),
   transferMode: z.enum(['auto', 'delta', 'full']),
+  conflictStrategy: z.enum(['newer-wins', 'skip', 'manual']),
   encryptionEnabled: z.boolean(),
   encryptionKeyId: z.string().optional(),
   retryAttempts: z.number().int().min(0).max(10),
@@ -54,6 +56,12 @@ const TRANSFER_MODES = [
   { value: 'full' as const, label: 'Full' },
 ]
 
+const CONFLICT_STRATEGIES = [
+  { value: 'newer-wins' as const, label: 'Newer wins', description: 'Overwrite with the more recently modified file' },
+  { value: 'skip'       as const, label: 'Skip',       description: 'Leave both files untouched' },
+  { value: 'manual'     as const, label: 'Manual',     description: 'Mark for manual resolution' },
+]
+
 export interface JobFormProps {
   job?: Job
   onSuccess: (job: Job) => void
@@ -79,6 +87,7 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
       destination: job?.destination ?? '',
       direction:   job?.direction   ?? 'ltr',
       transferMode: job?.transferMode ?? 'auto',
+      conflictStrategy: job?.conflictStrategy ?? 'newer-wins',
       encryptionEnabled: job?.reliability?.encryptionEnabled ?? false,
       encryptionKeyId: job?.reliability?.encryptionKeyId ?? '',
       retryAttempts: job?.reliability?.retryAttempts ?? 3,
@@ -96,6 +105,7 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
 
   const direction = watch('direction')
   const transferMode = watch('transferMode')
+  const conflictStrategy = watch('conflictStrategy')
   const encryptionEnabled = watch('encryptionEnabled')
   const resumeEnabled = watch('resumeEnabled')
   const watchEnabled = watch('watch')
@@ -103,8 +113,8 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
 
   const schedulePreview = (() => {
     if (!schedule) return { text: 'Manual only — trigger with Run button', cls: 'text-muted-foreground' }
-    if (isCronValid(schedule)) return { text: `Scheduled: ${schedule}`, cls: 'text-foreground' }
-    return { text: 'Invalid expression', cls: 'text-destructive' }
+    if (isCronValid(schedule)) return { text: describeCron(schedule), cls: 'text-foreground' }
+    return { text: 'Invalid cron expression', cls: 'text-destructive' }
   })()
 
   const onSubmit = async (values: FormValues) => {
@@ -115,6 +125,7 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
         destination: values.destination,
         direction:   values.direction,
         transferMode: values.transferMode,
+        conflictStrategy: values.conflictStrategy,
         reliability: {
           encryptionEnabled: values.encryptionEnabled,
           encryptionKeyId: values.encryptionKeyId || undefined,
@@ -213,6 +224,32 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
           ))}
         </div>
       </div>
+
+      {/* Conflict strategy — bidir only */}
+      {direction === 'bidir' && (
+        <div className="flex flex-col gap-1.5">
+          <Label>Conflict strategy</Label>
+          <div className="grid grid-cols-3 rounded-md border border-border overflow-hidden">
+            {CONFLICT_STRATEGIES.map(({ value, label, description }) => (
+              <button
+                key={value}
+                type="button"
+                title={description}
+                className={[
+                  'rounded-none px-3 py-2 text-sm not-last:border-r border-border hover:bg-accent transition-colors',
+                  conflictStrategy === value ? 'bg-secondary font-medium' : '',
+                ].join(' ')}
+                onClick={() => setValue('conflictStrategy', value, { shouldValidate: true })}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {CONFLICT_STRATEGIES.find(s => s.value === conflictStrategy)?.description}
+          </p>
+        </div>
+      )}
 
       {/* Reliability */}
       <div className="grid gap-3 sm:grid-cols-2">

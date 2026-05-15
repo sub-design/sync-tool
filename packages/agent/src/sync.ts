@@ -144,6 +144,7 @@ export async function runSync(
     filesCopied:      0,
     filesSkipped:     0,
     filesErrored:     0,
+    conflictsPending: 0,
     bytesTransferred: 0,
     logicalBytes:     0,
     deltaBytes:       0,
@@ -282,10 +283,25 @@ async function syncBidirectional(
 
     if (action === 'conflict') {
       conflictCount++
-      const msg = `CONFLICT ${rel} — both sides changed, applying newer-wins`
-      console.warn(`[sync] ⚠ ${msg}`)
-      result.errors.push(msg)
-      action = (srcEntry && dstEntry && srcEntry.mtimeMs >= dstEntry.mtimeMs) ? 'copy-to-dst' : 'copy-to-src'
+      const strategy = job.conflictStrategy ?? 'newer-wins'
+
+      if (strategy === 'newer-wins') {
+        const msg = `CONFLICT ${rel} — both sides changed, applying newer-wins`
+        console.warn(`[sync] ⚠ ${msg}`)
+        result.errors.push(msg)
+        action = (srcEntry && dstEntry && srcEntry.mtimeMs >= dstEntry.mtimeMs) ? 'copy-to-dst' : 'copy-to-src'
+      } else if (strategy === 'skip') {
+        console.warn(`[sync] ⚠ CONFLICT ${rel} — skipped (both sides changed)`)
+        result.filesSkipped++
+        action = 'skip'
+      } else {
+        // manual
+        const msg = `CONFLICT:MANUAL ${rel} — needs manual resolution`
+        console.warn(`[sync] ⚠ ${msg}`)
+        result.errors.push(msg)
+        result.conflictsPending = (result.conflictsPending ?? 0) + 1
+        action = 'skip'
+      }
     }
 
     try {
@@ -365,7 +381,10 @@ async function syncBidirectional(
   }
 
   state.setJobState(job.id, newState)
-  if (conflictCount > 0) console.log(`[sync] ${conflictCount} conflict(s) resolved by newer-wins tiebreaker`)
+  if (conflictCount > 0) {
+    const strategy = job.conflictStrategy ?? 'newer-wins'
+    console.log(`[sync] ${conflictCount} conflict(s) handled by strategy: ${strategy}`)
+  }
 }
 
 async function detectAndApplyMoves(

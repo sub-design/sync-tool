@@ -1,6 +1,7 @@
-export type JobDirection = 'ltr' | 'rtl' | 'bidir'
-export type JobStatus    = 'idle' | 'queued' | 'running' | 'completed' | 'cancelled' | 'error'
-export type TransferMode = 'full' | 'delta' | 'auto'
+export type JobDirection      = 'ltr' | 'rtl' | 'bidir'
+export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'cancelled' | 'error'
+export type TransferMode     = 'full' | 'delta' | 'auto'
+export type ConflictStrategy = 'newer-wins' | 'skip' | 'manual'
 export type BackendType  = 'local' | 'sftp' | 'ftp' | 'ftps' | 'smb' | 'nfs'
 
 export interface EndpointConfig {
@@ -38,6 +39,7 @@ export interface JobReliability {
 export interface Job {
   id: string; name: string; source: string; destination: string
   direction: JobDirection; transferMode?: TransferMode
+  conflictStrategy?: ConflictStrategy
   reliability?: JobReliability
   sourceDeviceId?: string; destinationDeviceId?: string
   watch?: boolean
@@ -53,6 +55,7 @@ export interface SyncProgress {
 export interface SyncResult {
   jobId: string; startedAt: number; endedAt: number
   filesCopied: number; filesSkipped: number; filesErrored: number
+  conflictsPending?: number
   bytesTransferred: number
   logicalBytes?: number; deltaBytes?: number; fullBytes?: number
   deltaFiles?: number; fullFiles?: number

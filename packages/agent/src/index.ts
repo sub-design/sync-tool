@@ -12,10 +12,11 @@ import type { AgentToServer, ServerToAgent, Job } from '@sync-tool/shared'
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const API_WS_BASE = process.env.API_URL  ?? 'ws://localhost:3001/agent'
-const AGENT_TOKEN = process.env.AGENT_TOKEN  // required in production
-const DEVICE_ID   = process.env.DEVICE_ID ?? uuid()   // persist this in production
-const RELAY_URL   = process.env.RELAY_URL
+const API_WS_BASE  = process.env.API_URL  ?? 'ws://localhost:3001/agent'
+const AGENT_TOKEN  = process.env.AGENT_TOKEN  // required in production
+const DEVICE_ID    = process.env.DEVICE_ID ?? uuid()   // persist this in production
+const RELAY_URL    = process.env.RELAY_URL
+const RELAY_TOKEN  = process.env.RELAY_TOKEN  // shared secret for relay auth
 const RECONNECT_MS = 5_000
 const DEFAULT_CONCURRENCY = Math.max(1, parseInt(process.env.AGENT_CONCURRENCY ?? '2', 10))
 
@@ -32,8 +33,9 @@ console.log(`[agent] Device ID : ${DEVICE_ID}`)
 console.log(`[agent] Hostname  : ${os.hostname()}`)
 console.log(`[agent] Connecting: ${API_WS_BASE}`)
 if (RELAY_URL) console.log(`[agent] Relay URL : ${RELAY_URL}`)
+if (RELAY_URL && !RELAY_TOKEN) console.warn('[agent] RELAY_TOKEN not set — relay will reject connection if RELAY_SECRET is configured')
 
-const relay = RELAY_URL ? new RelayClient(RELAY_URL, DEVICE_ID) : undefined
+const relay = RELAY_URL ? new RelayClient(RELAY_URL, DEVICE_ID, RELAY_TOKEN) : undefined
 if (relay) {
   registerRemoteDeltaHandlers(relay)
   relay.start()
