@@ -170,7 +170,8 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
             /* Selected state */
             <SelectedFolderPanel
               path={config.localPath}
-              onChangeRequest={handleBrowse}
+              onPathChange={path => updateConfig({ localPath: path })}
+              onBrowse={handleBrowse}
               onDragOver={handleDragOver}
               onDragEnter={handleDragOver}
               onDragLeave={handleDragLeave}
@@ -299,7 +300,8 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
 
 interface SelectedFolderPanelProps {
   path: string
-  onChangeRequest: () => void
+  onPathChange: (path: string) => void
+  onBrowse: () => void
   onDragOver: (e: React.DragEvent) => void
   onDragEnter: (e: React.DragEvent) => void
   onDragLeave: (e: React.DragEvent) => void
@@ -309,7 +311,8 @@ interface SelectedFolderPanelProps {
 
 function SelectedFolderPanel({
   path,
-  onChangeRequest,
+  onPathChange,
+  onBrowse,
   onDragOver,
   onDragEnter,
   onDragLeave,
@@ -317,38 +320,51 @@ function SelectedFolderPanel({
   isDragOver,
 }: SelectedFolderPanelProps) {
   const { name, breadcrumbs } = parseFolderPath(path)
+  const isAbsolute = path.startsWith('/') || /^[A-Za-z]:\\/.test(path)
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      className={[
-        'flex-1 flex flex-col items-center justify-center gap-3 rounded-xl border-2 p-8 min-h-[280px] cursor-pointer transition-colors group',
-        isDragOver
-          ? 'border-primary bg-primary/5'
-          : 'border-border hover:border-border/80 hover:bg-accent/40',
-      ].join(' ')}
-      onClick={onChangeRequest}
-      onKeyDown={e => e.key === 'Enter' && onChangeRequest()}
-      onDragOver={onDragOver}
-      onDragEnter={onDragEnter}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-    >
-      <Folder size={64} className="text-muted-foreground/50" strokeWidth={1} fill="currentColor" />
+    <div className="flex flex-col gap-2 flex-1">
+      {/* Visual drop zone */}
+      <div
+        className={[
+          'flex flex-col items-center justify-center gap-3 rounded-xl border-2 p-6 min-h-[200px] transition-colors',
+          isDragOver
+            ? 'border-primary bg-primary/5'
+            : 'border-border bg-accent/20',
+        ].join(' ')}
+        onDragOver={onDragOver}
+        onDragEnter={onDragEnter}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        <Folder size={52} className="text-muted-foreground/40" strokeWidth={1} fill="currentColor" />
+        <div className="flex flex-col items-center gap-0.5 text-center">
+          <p className="font-semibold text-sm text-foreground">{name}</p>
+          {breadcrumbs && (
+            <p className="text-xs text-muted-foreground">{breadcrumbs}</p>
+          )}
+        </div>
+        <Button type="button" variant="outline" size="sm" onClick={onBrowse}>
+          Browse…
+        </Button>
+      </div>
 
-      <div className="flex flex-col items-center gap-1 text-center">
-        <p className="font-semibold text-base text-foreground">{name}</p>
-        {breadcrumbs && (
-          <p className="text-xs text-muted-foreground max-w-[180px] leading-relaxed">
-            {breadcrumbs}
+      {/* Editable path — always visible so user can verify/correct */}
+      <div className="flex flex-col gap-1">
+        <div className="flex gap-2 items-center">
+          <Input
+            className="font-mono text-xs"
+            placeholder="/Users/alex/Documents"
+            value={path}
+            onChange={e => onPathChange(e.target.value)}
+          />
+        </div>
+        {!isAbsolute && (
+          <p className="text-xs text-destructive">
+            Enter the full absolute path (e.g. /Users/alex/Documents)
           </p>
         )}
       </div>
-
-      <p className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
-        Click to change folder
-      </p>
     </div>
   )
 }
