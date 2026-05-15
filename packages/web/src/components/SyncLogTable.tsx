@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronRight, RotateCcw, Loader2 } from 'lucide-react'
+import { CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronRight, RotateCcw, Loader2, Ban } from 'lucide-react'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
@@ -11,7 +11,7 @@ import { formatRelative, formatDuration, formatBytes } from '@/lib/format'
 export interface SyncLogEntry {
   id:               string
   job_id:           string
-  status:           'completed' | 'error'
+  status:           'completed' | 'error' | 'cancelled'
   error_message:    string | null
   started_at:       number
   ended_at:         number | null
@@ -21,6 +21,11 @@ export interface SyncLogEntry {
   files_errored:    number
   bytes_transferred: number
   logical_bytes:    number
+  delta_bytes:      number
+  full_bytes:       number
+  delta_files:      number
+  full_files:       number
+  transport_mode?:  string | null
   errors:           string   // JSON array of per-file error strings
   rollback_status?: 'none' | 'available' | 'used' | 'expired' | null
   is_rollback?:     boolean
@@ -34,6 +39,9 @@ interface SyncLogTableProps {
 }
 
 function StatusIcon({ entry }: { entry: SyncLogEntry }) {
+  if (entry.status === 'cancelled') {
+    return <Ban className="text-slate-400" size={16} />
+  }
   if (entry.status === 'error') {
     return <XCircle className="text-destructive" size={16} />
   }
@@ -79,6 +87,7 @@ export default function SyncLogTable({ entries, onRollback, rollbackingLogId }: 
           <TableHead>Copied</TableHead>
           <TableHead>Deleted</TableHead>
           <TableHead>Skipped</TableHead>
+          <TableHead>Transport</TableHead>
           <TableHead>Size</TableHead>
           <TableHead className="w-8" />
           <TableHead className="w-24" />
@@ -149,6 +158,15 @@ export default function SyncLogTable({ entries, onRollback, rollbackingLogId }: 
               {/* Skipped */}
               <TableCell className="text-sm text-muted-foreground">{entry.files_skipped}</TableCell>
 
+              {/* Transport */}
+              <TableCell className="text-sm">
+                {entry.transport_mode === 'relay' ? (
+                  <Badge variant="outline" className="border-blue-300 text-blue-600 text-xs">relay</Badge>
+                ) : entry.transport_mode === 'local' ? (
+                  <span className="text-xs text-muted-foreground">local</span>
+                ) : null}
+              </TableCell>
+
               {/* Size */}
               <TableCell className="text-sm">
                 {entry.bytes_transferred > 0 ? (
@@ -157,9 +175,21 @@ export default function SyncLogTable({ entries, onRollback, rollbackingLogId }: 
                       <span className="cursor-default">{formatBytes(entry.bytes_transferred)}</span>
                     </TooltipTrigger>
                     <TooltipContent>
-                      {entry.logical_bytes > 0
-                        ? `${formatBytes(entry.bytes_transferred)} network · ${formatBytes(entry.logical_bytes)} logical`
-                        : 'Network bytes transferred'}
+                      {(() => {
+                        const parts: string[] = []
+                        if (entry.logical_bytes > 0) {
+                          parts.push(`${formatBytes(entry.bytes_transferred)} network`)
+                          parts.push(`${formatBytes(entry.logical_bytes)} logical`)
+                        } else {
+                          parts.push('Network bytes transferred')
+                        }
+                        const totalFiles = (entry.delta_files ?? 0) + (entry.full_files ?? 0)
+                        if ((entry.delta_files ?? 0) > 0 && totalFiles > 0) {
+                          const pct = Math.round((entry.delta_files! / totalFiles) * 100)
+                          parts.push(`${pct}% delta`)
+                        }
+                        return parts.join(' · ')
+                      })()}
                     </TooltipContent>
                   </Tooltip>
                 ) : (
@@ -196,7 +226,7 @@ export default function SyncLogTable({ entries, onRollback, rollbackingLogId }: 
             /* Expandable error panel */
             isExpanded && !isRollbackRow && (
               <TableRow key={`${entry.id}-detail`} className="hover:bg-transparent">
-                <TableCell colSpan={9} className="pt-0 pb-2 px-4">
+                <TableCell colSpan={10} className="pt-0 pb-2 px-4">
                   <pre className="overflow-auto max-h-32 rounded-md bg-destructive/5 border border-destructive/20 px-3 py-2 font-mono text-xs text-destructive leading-relaxed whitespace-pre-wrap">
                     {expandContent.join('\n')}
                   </pre>

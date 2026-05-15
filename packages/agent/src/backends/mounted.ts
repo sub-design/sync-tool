@@ -70,6 +70,11 @@ export class MountedNetworkBackend implements StorageBackend {
     await localBackend.write(this.toLocalPath(filePath), stream, meta, options)
   }
 
+  async delete(filePath: string): Promise<void> {
+    await this.ensureMounted()
+    await localBackend.delete?.(this.toLocalPath(filePath))
+  }
+
   async move(fromPath: string, toPath: string, meta: FileMeta): Promise<void> {
     await this.ensureMounted()
     await localBackend.move?.(this.toLocalPath(fromPath), this.toLocalPath(toPath), meta)

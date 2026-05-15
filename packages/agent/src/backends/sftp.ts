@@ -1,3 +1,6 @@
+import fs   from 'node:fs'
+import os   from 'node:os'
+import path from 'node:path'
 import SftpClient from 'ssh2-sftp-client'
 import type { StorageBackend, FileEntry, FileMeta, WriteOptions } from '../sync'
 
@@ -8,14 +11,23 @@ export class SftpBackend implements StorageBackend {
   private port: number
   private username: string
   private password?: string
+  private keyPath?: string
 
   constructor(urlStr: string) {
     const url = new URL(urlStr)
 
-    this.host = url.hostname
-    this.port = parseInt(url.port, 10) || 22
+    this.host     = url.hostname
+    this.port     = parseInt(url.port, 10) || 22
     this.username = decodeURIComponent(url.username)
     this.password = url.password ? decodeURIComponent(url.password) : undefined
+
+    // Key auth: explicit ?keyPath= param, then SFTP_KEY_PATH env, then ~/.ssh/id_rsa
+    if (!this.password) {
+      this.keyPath = url.searchParams.get('keyPath')
+        ?? process.env.SFTP_KEY_PATH
+        ?? path.join(os.homedir(), '.ssh', 'id_rsa')
+    }
+
     this.client = new SftpClient('sync-tool')
   }
 
@@ -131,18 +143,33 @@ export class SftpBackend implements StorageBackend {
     await this.setMtime(toPath, meta.mtimeMs)
   }
 
+  async delete(filePath: string): Promise<void> {
+    await this.ensureConnected()
+    await (this.client as any).delete(filePath)
+  }
+
   private async ensureConnected(): Promise<void> {
     if (this.connected) return
 
-    await this.client.connect({
+    const connectOptions: Record<string, unknown> = {
       host:         this.host,
       port:         this.port,
       username:     this.username,
-      password:     this.password,
       readyTimeout: 10_000,
-    })
+    }
+
+    if (this.password) {
+      connectOptions.password = this.password
+    } else if (this.keyPath) {
+      connectOptions.privateKey = fs.readFileSync(this.keyPath)
+      const passphrase = process.env.SFTP_KEY_PASSPHRASE
+      if (passphrase) connectOptions.passphrase = passphrase
+    }
+
+    await this.client.connect(connectOptions as any)
     this.connected = true
-    console.log(`[sftp] Connected to ${this.username}@${this.host}:${this.port}`)
+    const authMethod = this.password ? 'password' : `key (${this.keyPath})`
+    console.log(`[sftp] Connected to ${this.username}@${this.host}:${this.port} via ${authMethod}`)
   }
 
   private async setMtime(filePath: string, mtimeMs: number): Promise<void> {

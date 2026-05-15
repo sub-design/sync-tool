@@ -86,6 +86,7 @@ export interface SyncResult {
   fullBytes?:       number
   deltaFiles?:      number
   fullFiles?:       number
+  transportMode?:   'local' | 'relay'
   errors:           string[]
   rollbackManifest?: RollbackManifest
 }
@@ -153,7 +154,6 @@ export type ServerToBrowser =
 //  Phase A: Connect / Relay protocol
 //  Agents register with Relay Server so they
 //  can reach each other through NAT.
-//  TODO: implement in Phase A
 // ─────────────────────────────────────────────
 
 export interface RelayDevice {

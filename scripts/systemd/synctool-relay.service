@@ -1,0 +1,22 @@
+[Unit]
+Description=Sync Tool Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=synctool
+Group=synctool
+WorkingDirectory=/opt/sync-tool
+EnvironmentFile=/etc/sync-tool/relay.env
+ExecStart=/usr/bin/pnpm --filter relay start
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/sync-tool
+
+[Install]
+WantedBy=multi-user.target

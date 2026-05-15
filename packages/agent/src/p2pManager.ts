@@ -13,10 +13,16 @@ try {
   // native addon not available — P2P disabled, relay will fall back to message relay only
 }
 
-const ICE_SERVERS: string[] = [
+const DEFAULT_ICE_SERVERS: string[] = [
   'stun:stun.l.google.com:19302',
   'stun:stun1.l.google.com:19302',
 ]
+const P2P_ENABLED = process.env.P2P_ENABLED === 'true'
+const ICE_SERVERS = parseIceServers(process.env.P2P_ICE_SERVERS)
+const ICE_TRANSPORT_POLICY = parseIceTransportPolicy(process.env.P2P_ICE_TRANSPORT_POLICY)
+const ENABLE_ICE_TCP = process.env.P2P_ENABLE_ICE_TCP === 'true'
+const PORT_RANGE_BEGIN = parseOptionalInt(process.env.P2P_PORT_RANGE_BEGIN)
+const PORT_RANGE_END = parseOptionalInt(process.env.P2P_PORT_RANGE_END)
 const P2P_TIMEOUT_MS = 15_000
 const CHANNEL_LABEL  = 'sync-tool'
 
@@ -29,6 +35,7 @@ interface PeerState {
 export class P2pManager {
   private peers       = new Map<string, PeerState>()
   private dataHandler = (_from: string, _payload: string): void => {}
+  private disabledLogged = false
 
   constructor(
     private readonly localId:    string,
@@ -41,6 +48,10 @@ export class P2pManager {
 
   // Called when relay reports a peer came online
   onPeerOnline(peerId: string) {
+    if (!P2P_ENABLED) {
+      this.logDisabled()
+      return
+    }
     if (this.peers.has(peerId)) return
     // Deterministic: lexicographically smaller id is the offerer — prevents glare
     this.setupPeer(peerId, this.localId < peerId)
@@ -51,6 +62,10 @@ export class P2pManager {
   }
 
   onSignal(from: string, signal: RTCSignal) {
+    if (!P2P_ENABLED) {
+      this.logDisabled()
+      return
+    }
     if (!this.peers.has(from)) {
       // Unexpected offer from a peer we haven't seen via relay:peer:online yet
       this.setupPeer(from, false)
@@ -79,6 +94,10 @@ export class P2pManager {
   }
 
   private setupPeer(peerId: string, offerer: boolean) {
+    if (!P2P_ENABLED) {
+      this.logDisabled()
+      return
+    }
     if (!PeerConnection) {
       console.warn('[p2p] node-datachannel not available — P2P disabled')
       return
@@ -86,7 +105,7 @@ export class P2pManager {
     const shortId = (id: string) => id.slice(0, 8)
     const pc = new PeerConnection(
       `${shortId(this.localId)}->${shortId(peerId)}`,
-      { iceServers: ICE_SERVERS },
+      p2pRtcConfig(),
     )
     const peer: PeerState = { pc, ready: false }
     this.peers.set(peerId, peer)
@@ -163,5 +182,43 @@ export class P2pManager {
     peer.ready = false
     try { peer.dc?.close() } catch {}
     try { peer.pc.close() } catch {}
+  }
+
+  private logDisabled() {
+    if (this.disabledLogged) return
+    this.disabledLogged = true
+    console.log('[p2p] Disabled; set P2P_ENABLED=true to try direct STUN/WebRTC channels')
+  }
+}
+
+export function parseIceServers(raw: string | undefined): string[] {
+  if (!raw) return DEFAULT_ICE_SERVERS
+  const servers = raw.split(',').map((entry) => entry.trim()).filter(Boolean)
+  return servers.length > 0 ? servers : DEFAULT_ICE_SERVERS
+}
+
+export function parseIceTransportPolicy(raw: string | undefined): 'all' | 'relay' {
+  return raw === 'relay' ? 'relay' : 'all'
+}
+
+export function parseOptionalInt(raw: string | undefined): number | undefined {
+  if (!raw) return undefined
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
+function p2pRtcConfig(): {
+  iceServers: string[]
+  iceTransportPolicy: 'all' | 'relay'
+  enableIceTcp?: boolean
+  portRangeBegin?: number
+  portRangeEnd?: number
+} {
+  return {
+    iceServers: ICE_SERVERS,
+    iceTransportPolicy: ICE_TRANSPORT_POLICY,
+    ...(ENABLE_ICE_TCP ? { enableIceTcp: true } : {}),
+    ...(PORT_RANGE_BEGIN ? { portRangeBegin: PORT_RANGE_BEGIN } : {}),
+    ...(PORT_RANGE_END ? { portRangeEnd: PORT_RANGE_END } : {}),
   }
 }

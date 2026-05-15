@@ -4,6 +4,7 @@ import { localBackend } from './local'
 import { createSftpBackend } from './sftp'
 import { createFtpBackend } from './ftp'
 import { createSmbBackend, createNfsBackend } from './mounted'
+import { createS3Backend } from './s3'
 
 export interface ResolvedBackend {
   backend:  StorageBackend
@@ -25,6 +26,8 @@ export function resolveBackend(location: string): ResolvedBackend {
       return createSmbBackend(location)
     case 'nfs':
       return createNfsBackend(location)
+    case 's3':
+      return createS3Backend(location)
     case undefined:
     case 'file':
       return {

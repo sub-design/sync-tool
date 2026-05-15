@@ -243,6 +243,7 @@ export async function runSync(
     fullBytes:        0,
     deltaFiles:       0,
     fullFiles:        0,
+    transportMode:    'local',
     errors:           [],
   }
 

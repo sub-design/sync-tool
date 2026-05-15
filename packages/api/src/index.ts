@@ -271,6 +271,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: st
         const job  = await jobsDb.get(msg.jobId)
         const jUid = await jobsDb.getUserId(msg.jobId)
         await jobsDb.setStatus(msg.jobId, 'cancelled')
+        await logDb.cancel(msg.jobId)
         broadcastToBrowsers({ type: 'job:cancelled', jobId: msg.jobId }, jUid)
         void notifyJob(job, { status: 'cancelled', jobId: msg.jobId })
         break

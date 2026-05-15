@@ -119,10 +119,16 @@ export class FtpBackend implements StorageBackend {
       }
     }
 
-    // TODO Phase 5 - preserve FTP mtime with MFMT when the server supports it.
     if (options.atomic) {
       await this.client.rename(targetPath, normalizedPath)
     }
+
+    await this.setMtime(normalizedPath, meta.mtimeMs)
+  }
+
+  async delete(filePath: string): Promise<void> {
+    await this.ensureConnected()
+    await this.client.remove(normalizeFtpPath(filePath))
   }
 
   async move(fromPath: string, toPath: string, _meta: FileMeta): Promise<void> {
@@ -132,6 +138,15 @@ export class FtpBackend implements StorageBackend {
     await this.client.ensureDir(parentDir)
     await this.client.cd('/')
     await this.client.rename(normalizeFtpPath(fromPath), normalizedTo)
+  }
+
+  private async setMtime(filePath: string, mtimeMs: number): Promise<void> {
+    try {
+      const ts = formatMfmtTimestamp(mtimeMs)
+      await this.client.send(`MFMT ${ts} ${filePath}`)
+    } catch {
+      // MFMT is not universally supported; a written file is still valid without mtime.
+    }
   }
 
   private async ensureConnected(): Promise<void> {
@@ -169,6 +184,16 @@ function normalizeFtpPath(filePath: string): string {
 
 function joinFtpPath(base: string, name: string): string {
   return `${base.replace(/\/+$/, '')}/${name}`.replace(/\/+/g, '/')
+}
+
+function formatMfmtTimestamp(mtimeMs: number): string {
+  const d   = new Date(mtimeMs)
+  const pad = (n: number, len = 2) => String(n).padStart(len, '0')
+  return (
+    `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}` +
+    `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}.` +
+    `${pad(d.getUTCMilliseconds(), 3)}`
+  )
 }
 
 function ftpPartialPath(filePath: string): string {

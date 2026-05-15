@@ -155,8 +155,117 @@ test('two-agent remote sync applies destination rename on source without transfe
   await runRemoteMoveScenario('dst')
 })
 
+test('two-agent remote sync transfers a new file through relay as full', { timeout: 30_000 }, async (t) => {
+  if (!(await hasDatabase())) return t.skip('PostgreSQL is not available')
+  await withRemoteAgents('remote-full', async ({ apiPort, auth, srcRoot, dstRoot }) => {
+    const content = 'full transfer over relay\n'
+    await fs.writeFile(path.join(srcRoot, 'full.txt'), content)
+
+    const job = await postJson(`http://127.0.0.1:${apiPort}/api/jobs`, {
+      name: 'remote full e2e',
+      source: srcRoot,
+      destination: dstRoot,
+      direction: 'ltr',
+      transferMode: 'full',
+      reliability: { encryptionEnabled: false },
+      sourceDeviceId: 'remote-source-agent',
+      destinationDeviceId: 'remote-destination-agent',
+    }, auth.jwt)
+
+    await postJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/run`, {}, auth.jwt)
+    await waitForFile(path.join(dstRoot, 'full.txt'), content, 'remote full transfer')
+    await waitFor(async () => (await getJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}`, auth.jwt)).status === 'completed', 'remote full completion')
+
+    const logs = await getJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/log?limit=1`, auth.jwt)
+    assert.equal(logs[0].files_copied, 1)
+    assert.equal(logs[0].full_files, 1)
+    assert.equal(logs[0].delta_files, 0)
+    assert.equal(logs[0].bytes_transferred, Buffer.byteLength(content))
+  })
+})
+
+test('two-agent remote sync transfers changed file through relay as delta', { timeout: 40_000 }, async (t) => {
+  if (!(await hasDatabase())) return t.skip('PostgreSQL is not available')
+  if (!(await hasSyncEngine())) return t.skip('sync engine binary is not available; run pnpm build:engine')
+
+  await withRemoteAgents('remote-delta', async ({ apiPort, auth, srcRoot, dstRoot }) => {
+    const initial = `${'A'.repeat(96 * 1024)}${'B'.repeat(96 * 1024)}`
+    await fs.writeFile(path.join(srcRoot, 'delta.txt'), initial)
+
+    const job = await postJson(`http://127.0.0.1:${apiPort}/api/jobs`, {
+      name: 'remote delta e2e',
+      source: srcRoot,
+      destination: dstRoot,
+      direction: 'ltr',
+      transferMode: 'delta',
+      reliability: { encryptionEnabled: false },
+      sourceDeviceId: 'remote-source-agent',
+      destinationDeviceId: 'remote-destination-agent',
+    }, auth.jwt)
+
+    await postJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/run`, {}, auth.jwt)
+    await waitForFile(path.join(dstRoot, 'delta.txt'), initial, 'initial remote delta basis sync')
+    await waitFor(async () => (await getJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}`, auth.jwt)).status === 'completed', 'initial remote delta completion')
+
+    const changed = `${'A'.repeat(96 * 1024)}changed-through-delta\n${'B'.repeat((96 * 1024) - 'changed-through-delta\n'.length)}`
+    await fs.writeFile(path.join(srcRoot, 'delta.txt'), changed)
+
+    await postJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/run`, {}, auth.jwt)
+    await waitForFile(path.join(dstRoot, 'delta.txt'), changed, 'remote delta transfer')
+    await waitFor(async () => (await getJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}`, auth.jwt)).status === 'completed', 'remote delta completion')
+
+    const logs = await getJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/log?limit=2`, auth.jwt)
+    assert.equal(logs[0].files_copied, 1)
+    assert.equal(logs[0].delta_files, 1)
+    assert.equal(logs[0].full_files, 0)
+    assert.equal(await fs.readFile(path.join(dstRoot, 'delta.txt'), 'utf8'), changed)
+  })
+})
+
 async function runRemoteMoveScenario(renameSide) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sync-tool-remote-move-e2e-'))
+  await withRemoteAgents(`remote-${renameSide}`, async ({ apiPort, auth, srcRoot, dstRoot }) => {
+    await fs.writeFile(path.join(srcRoot, 'old.txt'), 'remote move content')
+    const job = await postJson(`http://127.0.0.1:${apiPort}/api/jobs`, {
+      name: 'remote move e2e',
+      source: srcRoot,
+      destination: dstRoot,
+      direction: 'bidir',
+      transferMode: 'auto',
+      reliability: { encryptionEnabled: false },
+      sourceDeviceId: 'remote-source-agent',
+      destinationDeviceId: 'remote-destination-agent',
+    }, auth.jwt)
+
+    await postJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/run`, {}, auth.jwt)
+    await waitForFile(path.join(dstRoot, 'old.txt'), 'remote move content', 'initial remote sync')
+    await waitFor(async () => (await getJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}`, auth.jwt)).status === 'completed', 'initial completion')
+
+    if (renameSide === 'src') {
+      await fs.rename(path.join(srcRoot, 'old.txt'), path.join(srcRoot, 'renamed.txt'))
+    } else {
+      await fs.rename(path.join(dstRoot, 'old.txt'), path.join(dstRoot, 'renamed.txt'))
+    }
+    await postJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/run`, {}, auth.jwt)
+
+    await waitFor(async () => {
+      try {
+        return await fs.readFile(path.join(srcRoot, 'renamed.txt'), 'utf8') === 'remote move content'
+          && await fs.readFile(path.join(dstRoot, 'renamed.txt'), 'utf8') === 'remote move content'
+      } catch {
+        return false
+      }
+    }, 'remote move sync')
+
+    const logs = await getJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/log?limit=2`, auth.jwt)
+    assert.equal(logs[0].files_copied, 0)
+    assert.equal(logs[0].bytes_transferred, 0)
+    assert.deepEqual(visibleFiles(await fs.readdir(srcRoot)), ['renamed.txt'])
+    assert.deepEqual(visibleFiles(await fs.readdir(dstRoot)), ['renamed.txt'])
+  })
+}
+
+async function withRemoteAgents(suffix, scenario) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), `sync-tool-${suffix}-e2e-`))
   const processes = []
   try {
     const apiPort = await freePort()
@@ -178,7 +287,7 @@ async function runRemoteMoveScenario(renameSide) {
 
     await waitFor(async () => (await getJson(`http://127.0.0.1:${apiPort}/api/health`)).ok === true, 'api health')
     await waitFor(async () => (await getJson(`http://127.0.0.1:${relayPort}/health`)).ok === true, 'relay health')
-    const auth = await setupAuth(apiPort, `remote-${renameSide}`)
+    const auth = await setupAuth(apiPort, `remote-${suffix}`)
 
     const relayUrl = `ws://127.0.0.1:${relayPort}`
     const sourceAgent = startProcess('source-agent', ['packages/agent/dist/index.js'], {
@@ -210,49 +319,7 @@ async function runRemoteMoveScenario(renameSide) {
         && health.devices?.some((entry) => entry.deviceId === 'remote-destination-agent')
     }, 'relay registration')
 
-    await fs.writeFile(path.join(srcRoot, 'old.txt'), 'remote move content')
-    const job = await postJson(`http://127.0.0.1:${apiPort}/api/jobs`, {
-      name: 'remote move e2e',
-      source: srcRoot,
-      destination: dstRoot,
-      direction: 'bidir',
-      transferMode: 'auto',
-      reliability: { encryptionEnabled: false },
-      sourceDeviceId: 'remote-source-agent',
-      destinationDeviceId: 'remote-destination-agent',
-    }, auth.jwt)
-
-    await postJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/run`, {}, auth.jwt)
-    await waitFor(async () => {
-      try {
-        return await fs.readFile(path.join(dstRoot, 'old.txt'), 'utf8') === 'remote move content'
-      } catch {
-        return false
-      }
-    }, 'initial remote sync')
-    await waitFor(async () => (await getJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}`, auth.jwt)).status === 'completed', 'initial completion')
-
-    if (renameSide === 'src') {
-      await fs.rename(path.join(srcRoot, 'old.txt'), path.join(srcRoot, 'renamed.txt'))
-    } else {
-      await fs.rename(path.join(dstRoot, 'old.txt'), path.join(dstRoot, 'renamed.txt'))
-    }
-    await postJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/run`, {}, auth.jwt)
-
-    await waitFor(async () => {
-      try {
-        return await fs.readFile(path.join(srcRoot, 'renamed.txt'), 'utf8') === 'remote move content'
-          && await fs.readFile(path.join(dstRoot, 'renamed.txt'), 'utf8') === 'remote move content'
-      } catch {
-        return false
-      }
-    }, 'remote move sync')
-
-    const logs = await getJson(`http://127.0.0.1:${apiPort}/api/jobs/${job.id}/log?limit=2`, auth.jwt)
-    assert.equal(logs[0].files_copied, 0)
-    assert.equal(logs[0].bytes_transferred, 0)
-    assert.deepEqual(visibleFiles(await fs.readdir(srcRoot)), ['renamed.txt'])
-    assert.deepEqual(visibleFiles(await fs.readdir(dstRoot)), ['renamed.txt'])
+    await scenario({ apiPort, relayPort, auth, srcRoot, dstRoot, root })
   } finally {
     await Promise.all(processes.reverse().map((child) => stopProcess(child)))
     await fs.rm(root, { recursive: true, force: true })
@@ -321,6 +388,16 @@ async function hasDatabase() {
   })
 }
 
+async function hasSyncEngine() {
+  const enginePath = path.resolve(workspaceRoot, 'packages/sync-engine-go/bin/sync-engine')
+  try {
+    await fs.access(enginePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function setupAuth(port, suffix) {
   const email = `test-${suffix}@example.com`
   const password = 'correct horse battery staple'
@@ -363,6 +440,16 @@ async function waitFor(check, label) {
     await sleep(100)
   }
   throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError.message}` : ''}`)
+}
+
+async function waitForFile(filePath, expected, label) {
+  await waitFor(async () => {
+    try {
+      return await fs.readFile(filePath, 'utf8') === expected
+    } catch {
+      return false
+    }
+  }, label)
 }
 
 function sleep(ms) {

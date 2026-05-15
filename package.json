@@ -10,6 +10,8 @@
     "build": "pnpm -r build",
     "package:macos": "pnpm --filter agent bundle && pnpm --filter @sync-tool/app-macos dist:dmg",
     "test": "pnpm --filter agent test && pnpm build:engine",
+    "test:e2e": "pnpm --filter api build && pnpm --filter agent build && pnpm --filter relay build && node --test packages/agent/test/watch-e2e.test.js",
+    "test:e2e:docker": "scripts/run-e2e-with-docker-postgres.sh",
     "build:engine": "cd packages/sync-engine-go && go test ./... && go build -o bin/sync-engine ./cmd/sync-engine"
   },
   "devDependencies": {

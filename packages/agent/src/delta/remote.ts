@@ -79,6 +79,7 @@ export async function runRemoteDeltaSync(
     fullBytes:         0,
     deltaFiles:        0,
     fullFiles:         0,
+    transportMode:    'relay',
     errors:           [],
   }
 
@@ -99,9 +100,11 @@ export async function runRemoteDeltaSync(
       relay.request(targetDeviceId, 'delta:manifest', { root: targetLocation }) as Promise<RemoteManifestEntry[]>,
     ])
 
-    const targetFiles = new Map(targetEntries.map((entry) => [entry.relativePath, entry]))
-    const entries = [...sourceFiles.values()].filter((entry) => !entry.isDirectory)
-    let processed = 0
+    const targetFiles  = new Map(targetEntries.map((entry) => [entry.relativePath, entry]))
+    const prevState    = state.getJobState(job.id)
+    const newState     = new Map<string, StoredFileState>()
+    const entries      = [...sourceFiles.values()].filter((entry) => !entry.isDirectory)
+    let   processed    = 0
 
     for (const sourceEntry of entries) {
       throwIfAborted(signal)
@@ -126,6 +129,16 @@ export async function runRemoteDeltaSync(
         result.filesSkipped++
       }
 
+      // Track state so deletion policies can work on subsequent runs.
+      newState.set(sourceEntry.relativePath, {
+        srcSize:    sourceEntry.size,
+        srcMtimeMs: sourceEntry.mtimeMs,
+        dstSize:    targetEntry?.size    ?? sourceEntry.size,
+        dstMtimeMs: targetEntry?.mtimeMs ?? sourceEntry.mtimeMs,
+        checksum:   undefined,
+        syncedAt:   Date.now(),
+      })
+
       processed++
       onProgress({
         jobId:            job.id,
@@ -135,6 +148,38 @@ export async function runRemoteDeltaSync(
         bytesTransferred: result.bytesTransferred,
       })
     }
+
+    // Delete orphaned destination files according to deletion_policy.
+    const deletionPolicy = job.deletionPolicy ?? 'backup'
+    if (deletionPolicy !== 'backup') {
+      for (const [rel, targetEntry] of targetFiles) {
+        if (sourceFiles.has(rel)) continue
+
+        const shouldDelete = deletionPolicy === 'mirror'
+          || (() => {
+            // 'backup-with-deletes': remove only files that were previously tracked
+            // as present on both sides and haven't changed locally on dst.
+            const prev = prevState.get(rel)
+            return !!prev
+              && prev.srcMtimeMs != null
+              && targetEntry.size === (prev.dstSize ?? null)
+              && mtimeEqual(targetEntry.mtimeMs, prev.dstMtimeMs ?? 0)
+          })()
+
+        if (!shouldDelete) continue
+        throwIfAborted(signal)
+
+        try {
+          await relay.request(targetDeviceId, 'delta:delete', { root: targetLocation, relativePath: rel })
+          result.filesDeleted = (result.filesDeleted ?? 0) + 1
+        } catch (err: any) {
+          result.filesErrored++
+          result.errors.push(`${rel}: ${err.message}`)
+        }
+      }
+    }
+
+    state.setJobState(job.id, newState)
   } finally {
     result.endedAt = Date.now()
     await source.backend.close?.()
@@ -234,8 +279,9 @@ async function runRemoteBidirectionalSync(
             break
 
           case 'delete-dst':
-            // Remote delete requires a relay protocol extension — log for now (Phase 3)
-            console.log(`[remote] Would delete from dst (remote delete not yet implemented): ${rel}`)
+            await relay.request(destinationDeviceId, 'delta:delete', { root: job.destination, relativePath: rel })
+            result.filesDeleted = (result.filesDeleted ?? 0) + 1
+            stateSourceEntry = undefined
             break
 
           case 'delete-src':
@@ -288,6 +334,7 @@ async function runRemoteBidirectionalSync(
 export function registerRemoteDeltaHandlers(relay: RelayClient) {
   startTransferSessionSweeper()
   relay.onRequest(async (from, method, body) => {
+    validateRemoteDeltaRequest(method, body)
     switch (method) {
       case 'delta:manifest':
         return handleManifest(body.root)
@@ -307,10 +354,99 @@ export function registerRemoteDeltaHandlers(relay: RelayClient) {
         return handleSendDelta(relay, from, body.root, body.relativePath, body.targetRoot, body.signature, body.mode)
       case 'delta:move':
         return handleMove(body.root, body.fromRelativePath, body.toRelativePath, body.meta)
+      case 'delta:delete':
+        return handleDelete(body.root, body.relativePath)
       default:
         throw new Error(`Unsupported relay method: ${method}`)
     }
   })
+}
+
+export { handleTransferStart, handleTransferChunk, handleTransferFinish, handleTransferAbort, handleDelete }
+
+export function validateRemoteDeltaRequest(method: string, body: any): void {
+  if (!isRecord(body)) throw new Error(`Invalid relay ${method} body`)
+
+  switch (method) {
+    case 'delta:manifest':
+      requireString(body, 'root')
+      return
+
+    case 'delta:signature':
+      requireString(body, 'root')
+      requireString(body, 'relativePath')
+      return
+
+    case 'delta:transfer-start':
+      if (body.kind !== 'delta' && body.kind !== 'full') throw new Error('Invalid transfer kind')
+      requireString(body, 'root')
+      requireString(body, 'relativePath')
+      requireTransferMeta(body.meta)
+      return
+
+    case 'delta:transfer-chunk':
+      requireString(body, 'transferId')
+      requireNumber(body, 'seq')
+      requireString(body, 'dataBase64')
+      return
+
+    case 'delta:transfer-finish':
+      requireString(body, 'transferId')
+      if (body.expectedSHA256 !== undefined && typeof body.expectedSHA256 !== 'string') throw new Error('Invalid expectedSHA256')
+      return
+
+    case 'delta:transfer-abort':
+      requireString(body, 'transferId')
+      return
+
+    case 'delta:send-full':
+      requireString(body, 'root')
+      requireString(body, 'relativePath')
+      requireString(body, 'targetRoot')
+      return
+
+    case 'delta:send-delta':
+      requireString(body, 'root')
+      requireString(body, 'relativePath')
+      requireString(body, 'targetRoot')
+      if (body.mode !== 'auto' && body.mode !== 'delta' && body.mode !== 'full') throw new Error('Invalid transfer mode')
+      if (!isRecord(body.signature)) throw new Error('Invalid signature')
+      return
+
+    case 'delta:move':
+      requireString(body, 'root')
+      requireString(body, 'fromRelativePath')
+      requireString(body, 'toRelativePath')
+      requireTransferMeta(body.meta)
+      return
+
+    case 'delta:delete':
+      requireString(body, 'root')
+      requireString(body, 'relativePath')
+      assertSafeRelativePath(body.relativePath as string)
+      return
+
+    default:
+      return
+  }
+}
+
+function requireTransferMeta(value: unknown): void {
+  if (!isRecord(value)) throw new Error('Invalid transfer meta')
+  if (typeof value.size !== 'number' || !Number.isFinite(value.size) || value.size < 0) throw new Error('Invalid transfer size')
+  if (typeof value.mtimeMs !== 'number' || !Number.isFinite(value.mtimeMs)) throw new Error('Invalid transfer mtime')
+}
+
+function requireString(value: Record<string, unknown>, key: string): void {
+  if (typeof value[key] !== 'string' || value[key].length === 0) throw new Error(`Invalid ${key}`)
+}
+
+function requireNumber(value: Record<string, unknown>, key: string): void {
+  if (typeof value[key] !== 'number' || !Number.isFinite(value[key])) throw new Error(`Invalid ${key}`)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 interface RemoteMoveInput {
@@ -858,6 +994,19 @@ async function handleSendDelta(
   } finally {
     await source.backend.close?.()
     await fs.promises.rm(workDir, { recursive: true, force: true })
+  }
+}
+
+async function handleDelete(root: string, relativePath: string) {
+  assertSafeRelativePath(relativePath)
+  await assertAllowedLocalEndpoint(root)
+  const target = resolveBackend(root)
+  try {
+    if (!target.backend.delete) throw new Error('target backend does not support delete')
+    await target.backend.delete(joinRemote(target.rootPath, relativePath))
+    return { ok: true }
+  } finally {
+    await target.backend.close?.()
   }
 }
 

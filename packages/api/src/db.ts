@@ -120,6 +120,7 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS last_used_at BIGINT`,
     `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS revoked_at BIGINT`,
     `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS rotated_from TEXT`,
+    `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS transport_mode TEXT`,
   ]) {
     await sql.unsafe(stmt)
   }
@@ -394,7 +395,7 @@ export const jobsDb = {
 export interface SyncLogEntry {
   id:                 string
   job_id:             string
-  status:             'completed' | 'error'
+  status:             'completed' | 'error' | 'cancelled'
   error_message:      string | null
   started_at:         number
   ended_at:           number | null
@@ -408,6 +409,7 @@ export interface SyncLogEntry {
   full_bytes:         number
   delta_files:        number
   full_files:         number
+  transport_mode:     string | null
   errors:             string
   rollback_status:    'none' | 'available' | 'used' | 'expired'
   rollback_device_id: string | null
@@ -419,7 +421,7 @@ function rowToLogEntry(row: Record<string, unknown>): SyncLogEntry {
   return {
     id:                 String(row.id),
     job_id:             row.job_id as string,
-    status:             (row.status as string) === 'error' ? 'error' : 'completed',
+    status:             (['error', 'cancelled'].includes(row.status as string) ? row.status : 'completed') as SyncLogEntry['status'],
     error_message:      (row.error_message as string) ?? null,
     started_at:         Number(row.started_at),
     ended_at:           row.ended_at != null ? Number(row.ended_at) : null,
@@ -433,6 +435,7 @@ function rowToLogEntry(row: Record<string, unknown>): SyncLogEntry {
     full_bytes:         Number(row.full_bytes ?? 0),
     delta_files:        Number(row.delta_files ?? 0),
     full_files:         Number(row.full_files ?? 0),
+    transport_mode:     (row.transport_mode as string) ?? null,
     errors:             (row.errors as string) ?? '[]',
     rollback_status:    ((row.rollback_status as string) ?? 'none') as SyncLogEntry['rollback_status'],
     rollback_device_id: (row.rollback_device_id as string) ?? null,
@@ -460,10 +463,11 @@ export const logDb = {
         files_errored     = ${result.filesErrored},
         bytes_transferred = ${result.bytesTransferred},
         logical_bytes     = ${result.logicalBytes ?? 0},
-        delta_bytes       = ${result.deltaBytes   ?? 0},
-        full_bytes        = ${result.fullBytes    ?? 0},
-        delta_files       = ${result.deltaFiles   ?? 0},
-        full_files        = ${result.fullFiles    ?? 0},
+        delta_bytes       = ${result.deltaBytes      ?? 0},
+        full_bytes        = ${result.fullBytes       ?? 0},
+        delta_files       = ${result.deltaFiles      ?? 0},
+        full_files        = ${result.fullFiles       ?? 0},
+        transport_mode    = ${result.transportMode   ?? null},
         errors            = ${JSON.stringify(result.errors)}
       WHERE id = ${logId}
     `
@@ -478,12 +482,21 @@ export const logDb = {
     `
   },
 
+  /** Record a cancelled run — appears in history so the user knows it was stopped. */
+  async cancel(jobId: string): Promise<void> {
+    const now = Date.now()
+    await sql`
+      INSERT INTO sync_log (job_id, status, started_at, ended_at)
+      VALUES (${jobId}, 'cancelled', ${now}, ${now})
+    `
+  },
+
   async list(jobId: string, limit = 20): Promise<SyncLogEntry[]> {
     const rows = await sql`
       SELECT id, job_id, status, error_message, started_at, ended_at,
              files_copied, files_deleted, files_skipped, files_errored,
              bytes_transferred, logical_bytes, delta_bytes, full_bytes, delta_files, full_files,
-             errors, rollback_status, rollback_device_id, is_rollback, rollback_of
+             transport_mode, errors, rollback_status, rollback_device_id, is_rollback, rollback_of
       FROM sync_log WHERE job_id = ${jobId} ORDER BY started_at DESC LIMIT ${limit}
     `
     return rows.map(rowToLogEntry)

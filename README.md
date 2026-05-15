@@ -50,6 +50,13 @@ RELAY_TOKENS=home:$(openssl rand -hex 32) pnpm dev:relay
 # Runs on port 3002
 ```
 
+Agents use the relay when `RELAY_URL` is set. Use the matching namespace token
+from `RELAY_TOKENS` as `RELAY_TOKEN`:
+
+```bash
+RELAY_URL=ws://localhost:3002 RELAY_TOKEN=<home-token> pnpm dev:agent
+```
+
 ## Production security baseline
 
 Production deployments should terminate TLS at a reverse proxy or managed
@@ -70,6 +77,22 @@ SYNC_ENCRYPTION_KEY_FILE=/path/to/sync-tool.key
 # Relay namespaces. Agents using token-a can only see and route to other
 # devices in scope-a; they cannot address scope-b devices.
 RELAY_TOKENS=scope-a:token-a,scope-b:token-b
+
+# Relay hardening. Defaults are sized for 512 KiB transfer chunks.
+RELAY_MAX_WS_MESSAGE_BYTES=4194304
+RELAY_MAX_PAYLOAD_BYTES=3145728
+RELAY_RATE_LIMIT_WINDOW_MS=60000
+RELAY_RATE_LIMIT_MAX_MESSAGES=6000
+RELAY_HEARTBEAT_INTERVAL_MS=30000
+
+# Experimental direct P2P. Leave disabled until you have tested your network
+# path; relay remains the fallback transport.
+P2P_ENABLED=false
+P2P_ICE_SERVERS=stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302
+P2P_ICE_TRANSPORT_POLICY=all
+P2P_ENABLE_ICE_TCP=false
+P2P_PORT_RANGE_BEGIN=
+P2P_PORT_RANGE_END=
 
 # New agent tokens expire after this many days. Existing tokens without an
 # expiry remain valid until revoked or rotated.
@@ -263,8 +286,8 @@ same relay. Create the job with device ids:
 Run both agents with the same relay:
 
 ```bash
-DEVICE_ID=source-agent-device-id RELAY_URL=ws://localhost:3002 pnpm dev:agent
-DEVICE_ID=destination-agent-device-id RELAY_URL=ws://localhost:3002 pnpm dev:agent
+DEVICE_ID=source-agent-device-id RELAY_URL=ws://localhost:3002 RELAY_TOKEN=<home-token> pnpm dev:agent
+DEVICE_ID=destination-agent-device-id RELAY_URL=ws://localhost:3002 RELAY_TOKEN=<home-token> pnpm dev:agent
 ```
 
 In this mode, the destination agent sends a manifest and per-file signatures,
@@ -319,26 +342,80 @@ Preserve mtime in S3 object metadata.
 
 ## Phase A: Relay server (GoodSync Connect)
 
-The relay server is in `packages/relay/`. It's already implemented.
+The relay server is in `packages/relay/`. It is implemented and integrated with
+the agent.
+
+Current status:
+
+- Relay transport: implemented. Agents connect outbound over WebSocket, register
+  by `deviceId`, receive peer online/offline events, and route opaque payloads
+  with `relay:data`.
+- Relay auth and scoping: implemented with `RELAY_TOKENS=scope:token`. Agents
+  with different scopes cannot see or route to each other.
+- Two-agent sync over relay: implemented for remote delta/full transfer when a
+  job has `sourceDeviceId` and `destinationDeviceId`.
+- P2P/STUN: experimental. Agents attempt a direct `node-datachannel` channel
+  using STUN and relay-based signaling when `P2P_ENABLED=true`, then fall back
+  to relay if P2P is not ready.
+- TURN: configurable through `P2P_ICE_SERVERS`. Use `P2P_ICE_TRANSPORT_POLICY=relay`
+  to force TURN-only WebRTC tests; the application relay remains the fallback if
+  WebRTC cannot connect.
+
+TURN examples:
+
+```bash
+# UDP TURN
+P2P_ENABLED=true
+P2P_ICE_SERVERS=turn:USERNAME:PASSWORD@turn.example.com:3478
+
+# TCP/TLS TURN, useful behind stricter firewalls
+P2P_ENABLED=true
+P2P_ICE_SERVERS=turn:USERNAME:PASSWORD@turn.example.com:3478?transport=tcp,turns:USERNAME:PASSWORD@turn.example.com:5349
+P2P_ENABLE_ICE_TCP=true
+
+# Force WebRTC to use TURN relay candidates only while testing coturn.
+P2P_ICE_TRANSPORT_POLICY=relay
+```
 
 Deploy it on a VPS:
 ```bash
 # On your VPS
 git clone ... && cd sync-tool
 pnpm install
-PORT=3002 pnpm dev:relay   # or use PM2/systemd for production
+RELAY_TOKENS=home:<strong-random-token> PORT=3002 pnpm dev:relay
+# Use PM2/systemd for production.
 ```
 
 Point agents to it:
 ```bash
-RELAY_URL=wss://your-vps:3002 pnpm dev:agent
+RELAY_URL=wss://your-vps:3002 RELAY_TOKEN=<strong-random-token> pnpm dev:agent
 ```
 
-The relay allows agents on different networks to sync with each other.
+The relay allows agents on different networks to sync with each other without
+inbound firewall rules or port forwarding. For production, put it behind TLS and
+set `REQUIRE_SECURE_TRANSPORT=true`.
 
-**TODO in agent to connect to relay:**
-Add relay connection to `agent/src/index.ts` using the `AgentToRelay` / `RelayToAgent`
-message types from `shared/src/index.ts`.
+After deploying, run a relay smoke test from a machine that can reach the relay:
+
+```bash
+RELAY_URL=wss://your-vps:3002 RELAY_TOKEN=<strong-random-token> pnpm --filter relay smoke
+```
+
+The smoke test registers two temporary clients, verifies peer discovery, routes
+one `relay:data` message, routes one `relay:signal` message, and checks the
+offline peer event.
+
+Relay observability endpoints:
+
+```bash
+curl https://your-vps/health    # JSON health, limits, connection counts, metrics
+curl https://your-vps/metrics   # Prometheus text exposition format
+```
+
+See `docs/relay-production.md` for systemd, reverse proxy, smoke-test, and
+monitoring setup.
+
+For local end-to-end tests with PostgreSQL, see `docs/e2e-testing.md`.
 
 ---
 
