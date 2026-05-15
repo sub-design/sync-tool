@@ -6,4 +6,5 @@ allowBuilds:
   electron: true
   esbuild: true
   msw: true
+  node-datachannel: true
   ssh2: true

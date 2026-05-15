@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+  <title>Sync Tool — Preferences</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0 }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+      font-size: 13px;
+      background: #f5f5f5;
+      color: #1a1a1a;
+      padding: 20px;
+      -webkit-app-region: no-drag;
+    }
+
+    h2 { font-size: 15px; font-weight: 600; margin-bottom: 16px; color: #000 }
+
+    .field { margin-bottom: 12px }
+
+    label { display: block; font-weight: 500; margin-bottom: 4px; color: #444 }
+
+    input {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1px solid #c8c8c8;
+      border-radius: 5px;
+      font-size: 13px;
+      background: #fff;
+      outline: none;
+    }
+    input:focus { border-color: #0077ff; box-shadow: 0 0 0 2px rgba(0,119,255,0.2) }
+    input[readonly] { color: #888; background: #f0f0f0 }
+
+    .hint { margin-top: 3px; font-size: 11px; color: #888 }
+
+    .separator {
+      border: none;
+      border-top: 1px solid #ddd;
+      margin: 14px 0;
+    }
+
+    .connected-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      background: #e8f5e9;
+      border: 1px solid #c8e6c9;
+      border-radius: 6px;
+      margin-bottom: 14px;
+    }
+    .connected-badge .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #28a745;
+      flex-shrink: 0;
+    }
+    .connected-badge .info { flex: 1; font-size: 12px; color: #1b5e20 }
+    .connected-badge .info strong { display: block; font-size: 13px }
+    .connected-badge .signout {
+      font-size: 11px;
+      color: #666;
+      cursor: pointer;
+      text-decoration: underline;
+      background: none;
+      border: none;
+      padding: 0;
+    }
+
+    .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px }
+
+    button {
+      padding: 6px 16px;
+      border-radius: 5px;
+      font-size: 13px;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-cancel { background: #e0e0e0; color: #333 }
+    .btn-primary { background: #0077ff; color: #fff; font-weight: 500 }
+    .btn-primary:disabled { opacity: 0.5; cursor: default }
+
+    .status { margin-top: 10px; font-size: 12px; text-align: right; min-height: 16px }
+    .status.ok  { color: #28a745 }
+    .status.err { color: #dc3545 }
+  </style>
+</head>
+<body>
+  <h2>Preferences</h2>
+
+  <!-- ── Login view ─────────────────────────────────── -->
+  <div id="loginView">
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" type="email" placeholder="you@example.com" />
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" placeholder="••••••••" />
+    </div>
+    <hr class="separator" />
+    <div class="field">
+      <label for="deviceName">Device Name</label>
+      <input id="deviceName" type="text" placeholder="My MacBook" />
+      <div class="hint">How this device appears in the dashboard</div>
+    </div>
+
+    <details id="advancedSection" style="margin-top: 10px">
+      <summary style="font-size: 12px; color: #888; cursor: pointer; user-select: none">Advanced</summary>
+      <div class="field" style="margin-top: 10px">
+        <label for="apiUrl">Server URL</label>
+        <input id="apiUrl" type="url" placeholder="https://your-api.railway.app" />
+      </div>
+    </details>
+
+    <div class="actions">
+      <button class="btn-cancel" id="btnCancel">Cancel</button>
+      <button class="btn-primary" id="btnLogin">Sign in</button>
+    </div>
+    <div class="status" id="loginStatus"></div>
+  </div>
+
+  <!-- ── Connected view ────────────────────────────── -->
+  <div id="connectedView" style="display:none">
+    <div class="connected-badge">
+      <div class="dot"></div>
+      <div class="info">
+        <strong id="connectedEmail"></strong>
+        <span id="connectedServer" style="color:#555"></span>
+      </div>
+      <button class="signout" id="btnSignOut">Sign out</button>
+    </div>
+    <div class="field">
+      <label for="deviceNameEdit">Device Name</label>
+      <input id="deviceNameEdit" type="text" placeholder="My MacBook" />
+    </div>
+    <div class="field">
+      <label>Device ID</label>
+      <input id="deviceId" type="text" readonly />
+    </div>
+    <div class="actions">
+      <button class="btn-cancel" id="btnCancelConnected">Cancel</button>
+      <button class="btn-primary" id="btnSave">Save</button>
+    </div>
+    <div class="status" id="saveStatus"></div>
+  </div>
+
+  <script>
+    const api = window.syncTool
+
+    function showLogin(cfg) {
+      document.getElementById('loginView').style.display = ''
+      document.getElementById('connectedView').style.display = 'none'
+      if (cfg) {
+        document.getElementById('apiUrl').value     = cfg.apiUrl     || ''
+        document.getElementById('deviceName').value = cfg.deviceName || ''
+      }
+    }
+
+    function showConnected(cfg) {
+      document.getElementById('loginView').style.display = 'none'
+      document.getElementById('connectedView').style.display = ''
+      document.getElementById('connectedEmail').textContent  = cfg.email      || ''
+      document.getElementById('connectedServer').textContent = cfg.apiUrl     || ''
+      document.getElementById('deviceNameEdit').value        = cfg.deviceName || ''
+      document.getElementById('deviceId').value              = cfg.deviceId   || ''
+    }
+
+    async function load() {
+      const cfg = await api.getConfig()
+      if (cfg.agentToken) showConnected(cfg)
+      else showLogin(cfg)
+    }
+
+    // ── Login ──────────────────────────────────────────
+    document.getElementById('btnLogin').addEventListener('click', async () => {
+      const btn    = document.getElementById('btnLogin')
+      const status = document.getElementById('loginStatus')
+      const apiUrl     = document.getElementById('apiUrl').value.trim()
+      const email      = document.getElementById('email').value.trim()
+      const password   = document.getElementById('password').value
+      const deviceName = document.getElementById('deviceName').value.trim() || 'My Mac'
+
+      if (!apiUrl || !email || !password) {
+        status.className = 'status err'
+        status.textContent = 'Please fill in all fields.'
+        return
+      }
+
+      btn.disabled = true
+      btn.textContent = 'Signing in…'
+      status.className = 'status'
+      status.textContent = ''
+
+      try {
+        const result = await api.login({ apiUrl, email, password, deviceName })
+        const cfg = await api.getConfig()
+        showConnected({ ...cfg, email: result.email })
+      } catch (err) {
+        status.className = 'status err'
+        status.textContent = err.message || 'Sign in failed.'
+        btn.disabled = false
+        btn.textContent = 'Sign in'
+      }
+    })
+
+    // ── Sign out ───────────────────────────────────────
+    document.getElementById('btnSignOut').addEventListener('click', async () => {
+      await api.signOut()
+      const cfg = await api.getConfig()
+      showLogin(cfg)
+    })
+
+    // ── Save device name ───────────────────────────────
+    document.getElementById('btnSave').addEventListener('click', async () => {
+      const btn    = document.getElementById('btnSave')
+      const status = document.getElementById('saveStatus')
+      btn.disabled = true
+      await api.saveDeviceName(document.getElementById('deviceNameEdit').value.trim())
+      status.className = 'status ok'
+      status.textContent = 'Saved.'
+      setTimeout(() => { status.textContent = '' }, 2000)
+      btn.disabled = false
+    })
+
+    document.getElementById('btnCancel').addEventListener('click', () => api.close())
+    document.getElementById('btnCancelConnected').addEventListener('click', () => api.close())
+
+    // Sign in on Enter in password field
+    document.getElementById('password').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('btnLogin').click()
+    })
+
+    load()
+  </script>
+</body>
+</html>

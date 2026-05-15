@@ -1,0 +1,29 @@
+{
+  "name": "@sync-tool/app-macos",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsc && cp src/preferences/index.html dist/preferences/ && electron .",
+    "dev:watch": "concurrently \"tsc -w\" \"nodemon --watch dist --delay 1 --exec 'electron .'\"",
+    "build": "tsc && cp src/preferences/index.html dist/preferences/",
+    "dist": "tsc && cp src/preferences/index.html dist/preferences/ && electron-builder --mac",
+    "dist:dmg": "tsc && cp src/preferences/index.html dist/preferences/ && electron-builder --mac dmg"
+  },
+  "dependencies": {
+    "@sync-tool/shared": "workspace:*",
+    "electron-updater": "^6.3.9",
+    "uuid": "^9.0.1",
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@types/uuid": "^9.0.8",
+    "@types/ws": "^8.5.10",
+    "concurrently": "^8.2.2",
+    "electron": "^34.0.0",
+    "electron-builder": "^25.0.0",
+    "nodemon": "^3.1.2",
+    "typescript": "^5.4.5"
+  }
+}
