@@ -25,6 +25,15 @@ function isCronValid(expr: string): boolean {
   try { new Cron(expr); return true } catch { return false }
 }
 
+function generateJobName(): string {
+  const now = new Date()
+  const month = now.toLocaleString('en', { month: 'short' })
+  const day   = now.getDate()
+  const hh    = String(now.getHours()).padStart(2, '0')
+  const mm    = String(now.getMinutes()).padStart(2, '0')
+  return `Backup ${month} ${day}, ${hh}:${mm}`
+}
+
 const schema = z.object({
   name:               z.string().min(1).max(60),
   source:             z.string().min(1).refine(validateEndpoint, { message: 'Invalid path or connection URL' }),
@@ -85,7 +94,7 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      name:               job?.name        ?? '',
+      name:               job?.name        ?? generateJobName(),
       source:             job?.source      ?? '',
       destination:        job?.destination ?? '',
       direction:          job?.direction   ?? 'ltr',
