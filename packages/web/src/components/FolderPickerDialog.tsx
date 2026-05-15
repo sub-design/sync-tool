@@ -344,7 +344,7 @@ export function FolderPickerDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-4xl p-0 overflow-hidden">
+      <DialogContent className="sm:max-w-4xl p-0 overflow-hidden [&>div:first-child]:p-0 [&>div:first-child]:overflow-hidden">
       <div className="flex flex-col h-[600px] overflow-hidden">
 
         {/* ── Header ── */}
