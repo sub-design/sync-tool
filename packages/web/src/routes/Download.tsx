@@ -1,7 +1,7 @@
 import { Apple, Download, ArrowRight, Shield, FolderOpen, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
-const LATEST_VERSION = '0.2.1'
+const LATEST_VERSION = '0.2.3'
 const DMG_URL = `https://github.com/sub-design/sync-tool/releases/download/v${LATEST_VERSION}/Sync-Tool-${LATEST_VERSION}-arm64.dmg`
 
 export default function DownloadPage() {
