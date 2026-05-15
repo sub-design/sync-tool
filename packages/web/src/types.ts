@@ -72,6 +72,26 @@ export interface SyncResult {
   errors: string[]
 }
 
+export interface AgentToken {
+  id: string
+  name: string
+  createdAt: number
+  expiresAt?: number
+  lastUsedAt?: number
+}
+
+export interface AuditEntry {
+  id: string
+  action: string
+  actorType: string
+  actorId?: string
+  targetType?: string
+  targetId?: string
+  metadata: Record<string, unknown>
+  createdAt: number
+  ip?: string
+}
+
 export interface RollbackResult {
   jobId: string; startedAt: number; endedAt: number
   filesRestored: number; filesDeleted: number; filesErrored: number

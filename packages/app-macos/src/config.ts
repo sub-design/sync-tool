@@ -17,7 +17,7 @@ const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 const DEFAULTS: AppConfig = {
   apiUrl:     'https://api-production-186a.up.railway.app',
-  wsUrl:      'wss://api-production-186a.up.railway.app',
+  wsUrl:      'wss://api-production-186a.up.railway.app/agent',
   webUrl:     'https://web-seven-peach-99.vercel.app',
   agentToken: '',
   deviceId:   '',

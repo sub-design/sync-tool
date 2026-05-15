@@ -1,3 +1,4 @@
+import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
 import http from 'http'
@@ -6,8 +7,10 @@ import { initDb, jobsDb, logDb } from './db'
 import { createJobsRouter } from './routes/jobs'
 import { createAuthRouter } from './routes/auth'
 import { createDevicesRouter } from './routes/devices'
+import { createAuditRouter } from './routes/audit'
 import { authFromWsRequest, requireAuth } from './middleware/requireAuth'
 import { hitRateLimit } from './rateLimit'
+import { auditRequest, auditSystem } from './audit'
 import { notifyJob } from './notifications'
 import { schedulerPollMs, shouldRunNow } from './scheduler'
 import type { AgentToServer, ServerToAgent, ServerToBrowser, Job, DirEntry } from '@sync-tool/shared'
@@ -35,6 +38,12 @@ const browserWss = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (req, socket, head) => {
   if (secureTransportRequired() && !upgradeArrivedSecurely(req)) {
+    auditSystem('transport.rejected', {
+      actorType:  'network',
+      ip:         wsRateLimitAddress(req),
+      userAgent:  req.headers['user-agent'],
+      metadata:   { url: req.url, reason: 'insecure_transport' },
+    })
     socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
     socket.destroy()
     return
@@ -42,6 +51,12 @@ server.on('upgrade', (req, socket, head) => {
 
   const authKey = `ws-auth:${wsRateLimitAddress(req)}`
   if (hitRateLimit(authKey, 15 * 60_000, 60)) {
+    auditSystem('ws.rate_limited', {
+      actorType: 'network',
+      ip:        wsRateLimitAddress(req),
+      userAgent: req.headers['user-agent'],
+      metadata:  { url: req.url },
+    })
     socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n')
     socket.destroy()
     return
@@ -49,6 +64,12 @@ server.on('upgrade', (req, socket, head) => {
 
   authFromWsRequest(req).then((userId) => {
     if (!userId) {
+      auditSystem('ws.auth_failed', {
+        actorType: 'anonymous',
+        ip:        wsRateLimitAddress(req),
+        userAgent: req.headers['user-agent'],
+        metadata:  { path: req.url?.split('?')[0] },
+      })
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
       socket.destroy()
       return
@@ -200,6 +221,14 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: st
         agents.set(deviceId, { ws, userId, deviceId, hostname: msg.hostname, platform: msg.platform })
         ws.send(JSON.stringify({ type: 'registered', ok: true } satisfies ServerToAgent))
         broadcastToBrowsers({ type: 'agent:online', deviceId, hostname: msg.hostname }, userId)
+        auditSystem('agent.connected', {
+          userId,
+          actorType:  'agent',
+          actorId:    deviceId,
+          targetType: 'device',
+          targetId:   deviceId,
+          metadata:   { hostname: msg.hostname, platform: msg.platform },
+        })
         console.log(`[api] Agent registered: ${msg.hostname} (${deviceId})`)
         await sendWatchConfig(agents.get(deviceId)!)
         const queued = (await jobsDb.listForUser(userId)).filter((j) => j.status === 'queued')
@@ -322,6 +351,13 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: st
       const conn = agents.get(deviceId)
       agents.delete(deviceId)
       broadcastToBrowsers({ type: 'agent:offline', deviceId }, conn?.userId)
+      auditSystem('agent.disconnected', {
+        userId:     conn?.userId,
+        actorType:  'agent',
+        actorId:    deviceId,
+        targetType: 'device',
+        targetId:   deviceId,
+      })
       console.log(`[api] Agent disconnected: ${deviceId}`)
     }
   })
@@ -352,6 +388,7 @@ async function checkScheduledJobs(): Promise<void> {
 
 app.use('/api/auth',    createAuthRouter())
 app.use('/api/devices', createDevicesRouter())
+app.use('/api/audit',   createAuditRouter())
 app.use('/api/jobs',    createJobsRouter(
   async (msg) => {
     if (msg.type === 'job:run')    await queueJob(msg.job, 'manual')
@@ -376,6 +413,11 @@ app.get('/api/browse', requireAuth, async (req, res) => {
     : [...agents.values()].find(a => a.userId === userId)
 
   if (!target || target.userId !== userId) {
+    auditRequest(req, 'browse.rejected', {
+      targetType: 'device',
+      targetId:   deviceId,
+      metadata:   { path: browsePath, reason: 'agent_not_found_or_offline' },
+    })
     res.status(404).json({ error: 'Agent not found or offline' })
     return
   }
@@ -392,9 +434,19 @@ app.get('/api/browse', requireAuth, async (req, res) => {
   })
 
   if (result.error) {
+    auditRequest(req, 'browse.failed', {
+      targetType: 'device',
+      targetId:   target.deviceId,
+      metadata:   { path: browsePath, error: result.error },
+    })
     res.status(502).json({ error: result.error })
     return
   }
+  auditRequest(req, 'browse.succeeded', {
+    targetType: 'device',
+    targetId:   target.deviceId,
+    metadata:   { path: browsePath, resolvedPath: result.path, entries: result.entries.length },
+  })
   res.json({ path: result.path, entries: result.entries })
 })
 

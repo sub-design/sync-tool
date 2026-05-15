@@ -7,6 +7,7 @@ import JobDetail from './routes/JobDetail'
 import Devices from './routes/Devices'
 import Login from './routes/Login'
 import Download from './routes/Download'
+import Audit from './routes/Audit'
 
 const queryClient = new QueryClient()
 
@@ -25,6 +26,7 @@ export default function App() {
             <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />
             <Route path="/jobs/:id" element={<RequireAuth><JobDetail /></RequireAuth>} />
             <Route path="/devices" element={<RequireAuth><Devices /></RequireAuth>} />
+            <Route path="/audit" element={<RequireAuth><Audit /></RequireAuth>} />
           </Routes>
         </BrowserRouter>
       </TooltipProvider>

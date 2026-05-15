@@ -1,4 +1,4 @@
-import type { Job, DirEntry } from '../types'
+import type { Job, DirEntry, AgentToken, AuditEntry } from '../types'
 import { getToken, clearToken } from './auth'
 
 const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001'
@@ -80,15 +80,23 @@ export function getJobLog(id: string, limit?: number): Promise<unknown[]> {
   return apiFetch(`/api/jobs/${id}/log${qs}`)
 }
 
-export function listDevices(): Promise<Array<{ id: string; name: string; createdAt: number }>> {
+export function listDevices(): Promise<AgentToken[]> {
   return apiFetch('/api/devices')
 }
 
-export function createDevice(name: string): Promise<{ id: string; name: string; token: string }> {
+export function createDevice(name: string, expiresInDays?: number): Promise<AgentToken & { token: string }> {
   return apiFetch('/api/devices', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, expiresInDays }),
+  })
+}
+
+export function rotateDevice(id: string, expiresInDays?: number): Promise<AgentToken & { token: string }> {
+  return apiFetch(`/api/devices/${id}/rotate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expiresInDays }),
   })
 }
 
@@ -99,6 +107,10 @@ export function deleteDevice(id: string): Promise<void> {
 export function browseDir(deviceId: string, path: string): Promise<{ path: string; entries: DirEntry[] }> {
   const qs = new URLSearchParams({ deviceId, path })
   return apiFetch(`/api/browse?${qs}`)
+}
+
+export function listAudit(limit = 100): Promise<AuditEntry[]> {
+  return apiFetch(`/api/audit?limit=${limit}`)
 }
 
 export interface RollbackPreview {

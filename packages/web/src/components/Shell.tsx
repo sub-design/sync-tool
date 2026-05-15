@@ -35,6 +35,14 @@ export default function Shell({ children }: ShellProps) {
               Devices
             </NavLink>
             <NavLink
+              to="/audit"
+              className={({ isActive }) =>
+                isActive ? 'font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+              }
+            >
+              Audit
+            </NavLink>
+            <NavLink
               to="/download"
               className={({ isActive }) =>
                 isActive ? 'font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'

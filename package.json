@@ -2,11 +2,11 @@
   "name": "sync-tool",
   "private": true,
   "scripts": {
-    "dev": "concurrently \"PORT=3101 pnpm --filter api dev\" \"API_URL=ws://127.0.0.1:3101/agent pnpm --filter agent dev\" \"VITE_API_URL=http://127.0.0.1:3101/api VITE_WS_URL=ws://127.0.0.1:3101 pnpm --filter web dev\"",
+    "dev": "concurrently \"PORT=3101 pnpm --filter api dev\" \"API_URL=ws://127.0.0.1:3101/agent pnpm --filter agent dev\" \"VITE_API_URL=http://127.0.0.1:3101 VITE_WS_URL=ws://127.0.0.1:3101 pnpm --filter web dev\"",
     "dev:api": "PORT=3101 pnpm --filter api dev",
     "dev:agent": "API_URL=ws://127.0.0.1:3101/agent pnpm --filter agent dev",
     "dev:relay": "pnpm --filter relay dev",
-    "dev:web": "concurrently \"PORT=3101 pnpm --filter api dev\" \"pnpm --filter relay dev\" \"VITE_API_URL=http://127.0.0.1:3101/api VITE_WS_URL=ws://127.0.0.1:3101 pnpm --filter web dev\"",
+    "dev:web": "concurrently \"PORT=3101 pnpm --filter api dev\" \"pnpm --filter relay dev\" \"VITE_API_URL=http://127.0.0.1:3101 VITE_WS_URL=ws://127.0.0.1:3101 pnpm --filter web dev\"",
     "build": "pnpm -r build",
     "package:macos": "pnpm --filter agent bundle && pnpm --filter @sync-tool/app-macos dist:dmg",
     "test": "pnpm --filter agent test && pnpm build:engine",

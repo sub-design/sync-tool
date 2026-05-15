@@ -4,6 +4,7 @@ import { hashPassword, checkPassword, signJwt } from '../auth'
 import { usersDb } from '../db'
 import { requireAuth } from '../middleware/requireAuth'
 import { createRateLimiter, rateLimitIp } from '../rateLimit'
+import { auditRequest } from '../audit'
 
 export function createAuthRouter(): Router {
   const router = Router()
@@ -27,6 +28,12 @@ export function createAuthRouter(): Router {
 
       const passwordHash = await hashPassword(password)
       const user         = await usersDb.create(uuid(), email, passwordHash)
+      auditRequest(req, 'auth.registered', {
+        userId:     user.id,
+        actorId:    user.id,
+        targetType: 'user',
+        targetId:   user.id,
+      })
       res.status(201).json({ token: signJwt(user.id), user: { id: user.id, email: user.email } })
     } catch (err) {
       console.error('[auth] register error', err)
@@ -42,9 +49,20 @@ export function createAuthRouter(): Router {
 
       const user = await usersDb.getByEmail(email)
       if (!user || !(await checkPassword(password, user.passwordHash))) {
+        auditRequest(req, 'auth.login_failed', {
+          userId:    user?.id,
+          actorType: 'anonymous',
+          metadata:  { email: typeof email === 'string' ? email : undefined },
+        })
         res.status(401).json({ error: 'Invalid credentials' })
         return
       }
+      auditRequest(req, 'auth.login_succeeded', {
+        userId:     user.id,
+        actorId:    user.id,
+        targetType: 'user',
+        targetId:   user.id,
+      })
       res.json({ token: signJwt(user.id), user: { id: user.id, email: user.email } })
     } catch (err) {
       console.error('[auth] login error', err)

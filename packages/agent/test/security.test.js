@@ -122,6 +122,47 @@ test('new jobs default to encryption while explicit existing settings are preser
   }
 })
 
+test('agent tokens expose expiry, can rotate, and write audit events', { timeout: 15_000 }, async (t) => {
+  if (!(await hasDatabase())) return t.skip('PostgreSQL is not available')
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sync-tool-token-audit-'))
+  const port = await freePort()
+  const api = startProcess('api', ['packages/api/dist/index.js'], {
+    PORT: String(port),
+    DATA_DIR: path.join(root, 'api-data'),
+    AGENT_TOKEN_TTL_DAYS: '7',
+  })
+  try {
+    await waitFor(async () => (await getJson(`http://127.0.0.1:${port}/api/health`)).ok === true, 'api health')
+    const registered = await postJson(`http://127.0.0.1:${port}/api/auth/register`, {
+      email: 'audit@example.com',
+      password: 'correct horse battery staple',
+    })
+
+    const device = await postJson(`http://127.0.0.1:${port}/api/devices`, { name: 'rotating-agent' }, registered.token)
+    assert.equal(typeof device.token, 'string')
+    assert.equal(typeof device.expiresAt, 'number')
+
+    const listed = await getJson(`http://127.0.0.1:${port}/api/devices`, registered.token)
+    assert.equal(listed.length, 1)
+    assert.equal(listed[0].expiresAt, device.expiresAt)
+
+    const rotated = await postJson(`http://127.0.0.1:${port}/api/devices/${device.id}/rotate`, {}, registered.token)
+    assert.equal(typeof rotated.token, 'string')
+    assert.notEqual(rotated.token, device.token)
+
+    const listedAfterRotate = await getJson(`http://127.0.0.1:${port}/api/devices`, registered.token)
+    assert.deepEqual(listedAfterRotate.map((entry) => entry.id), [rotated.id])
+
+    const audit = await getJson(`http://127.0.0.1:${port}/api/audit`, registered.token)
+    const actions = audit.map((entry) => entry.action)
+    assert.ok(actions.includes('agent_token.created'))
+    assert.ok(actions.includes('agent_token.rotated'))
+  } finally {
+    await stopProcess(api)
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
 function restoreEnv(name, value) {
   if (value == null) delete process.env[name]
   else process.env[name] = value
