@@ -3,7 +3,7 @@ import { Controller, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Cron } from 'croner'
-import { ArrowLeftRight, ArrowRight, CheckIcon, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, CheckIcon, ChevronRight, Loader2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'

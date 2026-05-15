@@ -109,7 +109,6 @@ export default function EndpointPicker({ label, value, onChange }: EndpointPicke
   const usesPort   = config.type === 'sftp' || config.type === 'ftp' || config.type === 'ftps'
   const usesCreds  = isRemote && config.type !== 'nfs'
   const hasLocal   = !isRemote && !!config.localPath
-  const hasRemote  = isRemote && !!config.host
   const currentOpt = BACKEND_OPTIONS.find(o => o.type === config.type)!
 
   return (
