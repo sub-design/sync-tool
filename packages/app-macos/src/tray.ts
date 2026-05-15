@@ -2,7 +2,6 @@ import { Tray, Menu, MenuItem, nativeImage, shell, app, Notification } from 'ele
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { connectionState, jobs } from './ws-client'
-import { agentStatus, startAgent, stopAgent } from './agent-manager'
 import { isLaunchAgentInstalled, installLaunchAgent, uninstallLaunchAgent } from './autolaunch'
 import { getConfig } from './config'
 import { isUpdateAvailable, getLatestVersion, openReleasePage, checkForUpdates } from './updater'
@@ -31,19 +30,17 @@ function buildIcon(variant: 'idle' | 'active' | 'error'): Electron.NativeImage {
 
 function buildTrayTitle(): string {
   const conn = connectionState()
-  const agSt = agentStatus()
   if (conn === 'connected') {
     const running = jobs().filter((j) => j.status === 'running').length
     if (running > 0) return `⟳ ${running}`
   }
-  if (conn === 'connecting' || agSt === 'starting') return '…'
+  if (conn === 'connecting') return '…'
   if (conn === 'disconnected') return '●'
   return ''
 }
 
 function buildContextMenu(): Menu {
   const conn  = connectionState()
-  const agSt  = agentStatus()
   const cfg   = getConfig()
   const jobList = jobs()
 
@@ -83,23 +80,6 @@ function buildContextMenu(): Menu {
     label: 'Open Dashboard ↗',
     click: () => shell.openExternal(cfg.webUrl),
   }))
-
-  items.push(new MenuItem({ type: 'separator' }))
-
-  // ── Agent toggle ───────────────────────────────────────────────────────────
-  if (agSt === 'running') {
-    items.push(new MenuItem({ label: 'Agent: Running', enabled: false }))
-    items.push(new MenuItem({ label: 'Stop Agent', click: stopAgent }))
-  } else if (agSt === 'starting') {
-    items.push(new MenuItem({ label: 'Agent: Starting…', enabled: false }))
-  } else {
-    items.push(new MenuItem({ label: 'Agent: Stopped', enabled: false }))
-    items.push(new MenuItem({
-      label: 'Start Agent',
-      enabled: !!cfg.agentToken,
-      click: startAgent,
-    }))
-  }
 
   items.push(new MenuItem({ type: 'separator' }))
 

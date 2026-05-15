@@ -15,9 +15,10 @@ await build({
   outfile: 'bundle/index.js',
   external: [
     // Native addons — cannot be bundled, degrade gracefully
-    'fsevents',       // chokidar on macOS (falls back to polling)
-    'cpu-features',   // ssh2 perf (optional)
-    'sshcrypto',      // ssh2 crypto (optional, falls back to pure JS)
+    'node-datachannel', // WebRTC P2P (optional relay feature), uses ESM + native .node
+    'fsevents',         // chokidar on macOS (falls back to polling)
+    'cpu-features',     // ssh2 perf (optional)
+    'sshcrypto',        // ssh2 crypto (optional, falls back to pure JS)
     '*.node',
   ],
   // Don't minify — stack traces stay readable in logs

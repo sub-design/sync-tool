@@ -9,6 +9,9 @@ export type AgentStatus = 'stopped' | 'starting' | 'running' | 'error'
 let agentProcess: ChildProcess | null = null
 let _status: AgentStatus = 'stopped'
 let _onStatusChange: ((s: AgentStatus) => void) | null = null
+let _restartTimer: ReturnType<typeof setTimeout> | null = null
+let _restartDelay = 2_000
+let _intentionallyStopped = false
 
 export function onAgentStatusChange(cb: (s: AgentStatus) => void): void {
   _onStatusChange = cb
@@ -56,12 +59,18 @@ function resolveAgentCommand(): AgentCommand {
 }
 
 export function startAgent(): void {
+  _intentionallyStopped = false
+  if (_restartTimer) {
+    clearTimeout(_restartTimer)
+    _restartTimer = null
+  }
+  _spawnAgent()
+}
+
+function _spawnAgent(): void {
   if (agentProcess) return
   const cfg = getConfig()
-  if (!cfg.agentToken) {
-    setStatus('error')
-    return
-  }
+  if (!cfg.agentToken) return
 
   setStatus('starting')
   const { cmd, args, extraEnv } = resolveAgentCommand()
@@ -78,9 +87,14 @@ export function startAgent(): void {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
+  const startedAt = Date.now()
+
   agentProcess.stdout?.on('data', (d: Buffer) => {
     const line = d.toString().trim()
-    if (line.includes('Registered')) setStatus('running')
+    if (line.includes('Registered')) {
+      _restartDelay = 2_000
+      setStatus('running')
+    }
     console.log('[agent]', line)
   })
 
@@ -89,7 +103,6 @@ export function startAgent(): void {
   })
 
   agentProcess.on('spawn', () => {
-    // Will flip to 'running' once we see "Registered" in stdout
     setTimeout(() => {
       if (_status === 'starting') setStatus('running')
     }, 5_000)
@@ -97,11 +110,31 @@ export function startAgent(): void {
 
   agentProcess.on('exit', (code) => {
     agentProcess = null
-    setStatus(code === 0 ? 'stopped' : 'error')
+    if (_intentionallyStopped) {
+      setStatus('stopped')
+      return
+    }
+
+    const ranFor = Date.now() - startedAt
+    if (ranFor > 30_000) _restartDelay = 2_000
+
+    setStatus('error')
+    console.log(`[agent] Crashed (code ${code}). Restarting in ${_restartDelay / 1000}s…`)
+    _restartTimer = setTimeout(() => {
+      _restartTimer = null
+      if (!_intentionallyStopped) _spawnAgent()
+    }, _restartDelay)
+
+    _restartDelay = Math.min(_restartDelay * 2, 30_000)
   })
 }
 
 export function stopAgent(): void {
+  _intentionallyStopped = true
+  if (_restartTimer) {
+    clearTimeout(_restartTimer)
+    _restartTimer = null
+  }
   if (!agentProcess) return
   agentProcess.kill('SIGTERM')
   agentProcess = null
@@ -110,7 +143,8 @@ export function stopAgent(): void {
 
 export function restartAgent(): void {
   stopAgent()
-  setTimeout(startAgent, 500)
+  _intentionallyStopped = false
+  setTimeout(_spawnAgent, 500)
 }
 
 // Clean up on app quit

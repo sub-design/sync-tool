@@ -1,5 +1,17 @@
-import { PeerConnection, DataChannel } from 'node-datachannel'
 import type { RTCSignal } from '@sync-tool/shared'
+
+// node-datachannel is a native addon — load lazily so the agent starts even when it's unavailable
+// (relay/P2P is optional; most users don't set RELAY_URL)
+let PeerConnection: (new (id: string, opts: { iceServers: string[] }) => any) | null = null
+let DataChannel: any = null
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const ndc = require('node-datachannel') as typeof import('node-datachannel')
+  PeerConnection = ndc.PeerConnection as any
+  DataChannel = ndc.DataChannel
+} catch {
+  // native addon not available — P2P disabled, relay will fall back to message relay only
+}
 
 const ICE_SERVERS: string[] = [
   'stun:stun.l.google.com:19302',
@@ -67,6 +79,10 @@ export class P2pManager {
   }
 
   private setupPeer(peerId: string, offerer: boolean) {
+    if (!PeerConnection) {
+      console.warn('[p2p] node-datachannel not available — P2P disabled')
+      return
+    }
     const shortId = (id: string) => id.slice(0, 8)
     const pc = new PeerConnection(
       `${shortId(this.localId)}->${shortId(peerId)}`,
