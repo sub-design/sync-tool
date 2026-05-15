@@ -1,4 +1,10 @@
-export type { DirEntry } from '@sync-tool/shared'
+export interface DirEntry {
+  name:        string
+  type:        'file' | 'directory'
+  path:        string
+  size?:       number
+  modifiedAt?: number
+}
 
 export type JobDirection      = 'ltr' | 'rtl' | 'bidir'
 export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'cancelled' | 'error'
