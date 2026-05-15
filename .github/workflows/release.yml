@@ -1,0 +1,43 @@
+name: Release macOS App
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: macos-latest
+    permissions:
+      contents: write   # needed to create GitHub Releases
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Sync version from tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          cd packages/app-macos && npm version "$TAG" --no-git-tag-version
+
+      - name: Bundle agent
+        run: pnpm --filter agent bundle
+
+      - name: Build & publish macOS app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm --filter @sync-tool/app-macos dist:dmg -- --publish always
