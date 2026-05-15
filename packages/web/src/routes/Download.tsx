@@ -1,10 +1,34 @@
-import { Apple, Download, ArrowRight, Shield, FolderOpen, Zap } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Apple, Download, ArrowRight, Shield, FolderOpen, Zap, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
-const DMG_URL =
-  'https://github.com/sub-design/sync-tool/releases/latest/download/Sync.Tool-0.1.0-arm64.dmg'
+const RELEASES_API = 'https://api.github.com/repos/sub-design/sync-tool/releases/latest'
+
+interface ReleaseInfo {
+  version: string
+  dmgUrl:  string
+}
+
+function useLatestRelease(): ReleaseInfo | null {
+  const [info, setInfo] = useState<ReleaseInfo | null>(null)
+
+  useEffect(() => {
+    fetch(RELEASES_API)
+      .then(r => r.json())
+      .then(data => {
+        const dmg = (data.assets as Array<{ name: string; browser_download_url: string }>)
+          .find(a => a.name.endsWith('-arm64.dmg'))
+        if (dmg) setInfo({ version: data.tag_name.replace(/^v/, ''), dmgUrl: dmg.browser_download_url })
+      })
+      .catch(() => {})
+  }, [])
+
+  return info
+}
 
 export default function DownloadPage() {
+  const release = useLatestRelease()
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
@@ -32,14 +56,21 @@ export default function DownloadPage() {
         </div>
 
         {/* Download button */}
-        <a href={DMG_URL} download>
-          <Button size="lg" className="gap-2 px-8 text-base h-12">
-            <Download size={18} />
-            Download for macOS
+        {release ? (
+          <a href={release.dmgUrl}>
+            <Button size="lg" className="gap-2 px-8 text-base h-12">
+              <Download size={18} />
+              Download for macOS
+            </Button>
+          </a>
+        ) : (
+          <Button size="lg" className="gap-2 px-8 text-base h-12" disabled>
+            <Loader2 size={18} className="animate-spin" />
+            Loading…
           </Button>
-        </a>
+        )}
         <p className="text-xs text-muted-foreground">
-          Version 0.1.0 · Universal (Apple Silicon + Intel) · macOS 13+
+          {release ? `Version ${release.version}` : '—'} · Apple Silicon · macOS 13+
         </p>
 
         {/* Install steps */}
