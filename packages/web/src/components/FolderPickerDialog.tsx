@@ -344,7 +344,8 @@ export function FolderPickerDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-4xl h-[600px] flex flex-col gap-0 p-0 overflow-hidden">
+      <DialogContent className="sm:max-w-4xl p-0 overflow-hidden">
+      <div className="flex flex-col h-[600px] overflow-hidden">
 
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
@@ -462,6 +463,7 @@ export function FolderPickerDialog({
           </Button>
         </div>
 
+      </div>
       </DialogContent>
     </Dialog>
   )
