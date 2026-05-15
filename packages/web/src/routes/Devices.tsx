@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Copy, Plus, Trash2, Monitor, WifiOff } from 'lucide-react'
+import { Copy, Plus, RotateCw, Trash2, Monitor, WifiOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -24,6 +24,15 @@ export default function Devices() {
   const deleteMutation = useMutation({
     mutationFn: api.deleteDevice,
     onSuccess:  () => queryClient.invalidateQueries({ queryKey: ['devices'] }),
+  })
+
+  const rotateMutation = useMutation({
+    mutationFn: (id: string) => api.rotateDevice(id),
+    onSuccess: (result) => {
+      setNewToken(result.token)
+      setCreateOpen(true)
+      queryClient.invalidateQueries({ queryKey: ['devices'] })
+    },
   })
 
   // ── Create token dialog ───────────────────────────────────────────────────────
@@ -118,7 +127,21 @@ export default function Devices() {
                   <p className="text-xs text-muted-foreground">
                     Created {formatRelative(t.createdAt)}
                   </p>
+                  <p className="text-xs text-muted-foreground">
+                    {t.lastUsedAt ? `Last used ${formatRelative(t.lastUsedAt)}` : 'Never used'}
+                    {' · '}
+                    {t.expiresAt ? `Expires ${formatRelative(t.expiresAt)}` : 'No expiry'}
+                  </p>
                 </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-muted-foreground hover:text-foreground shrink-0"
+                  onClick={() => rotateMutation.mutate(t.id)}
+                  title="Rotate token"
+                >
+                  <RotateCw className="size-4" />
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon"

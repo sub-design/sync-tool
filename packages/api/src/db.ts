@@ -34,6 +34,22 @@ export async function initDb(): Promise<void> {
   `
 
   await sql`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id          BIGSERIAL PRIMARY KEY,
+      user_id     TEXT REFERENCES users(id) ON DELETE SET NULL,
+      action      TEXT   NOT NULL,
+      actor_type  TEXT   NOT NULL,
+      actor_id    TEXT,
+      ip          TEXT,
+      user_agent  TEXT,
+      target_type TEXT,
+      target_id   TEXT,
+      metadata    TEXT   DEFAULT '{}',
+      created_at  BIGINT NOT NULL
+    )
+  `
+
+  await sql`
     CREATE TABLE IF NOT EXISTS jobs (
       id                    TEXT   PRIMARY KEY,
       user_id               TEXT   REFERENCES users(id) ON DELETE CASCADE,
@@ -100,9 +116,16 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS rollback_device_id TEXT`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS is_rollback BOOLEAN NOT NULL DEFAULT false`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS rollback_of BIGINT`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS expires_at BIGINT`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS last_used_at BIGINT`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS revoked_at BIGINT`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS rotated_from TEXT`,
   ]) {
     await sql.unsafe(stmt)
   }
+
+  await sql`CREATE INDEX IF NOT EXISTS audit_log_user_created_idx ON audit_log (user_id, created_at DESC)`
+  await sql`CREATE INDEX IF NOT EXISTS agent_tokens_user_active_idx ON agent_tokens (user_id, revoked_at, expires_at)`
 }
 
 // ── Row mappers ───────────────────────────────────────────────────────────────
@@ -165,23 +188,122 @@ export const usersDb = {
     return row ? { id: row.id, email: row.email, passwordHash: row.password_hash, createdAt: Number(row.created_at) } : undefined
   },
 
-  async createToken(id: string, userId: string, name: string, tokenHash: string): Promise<void> {
-    await sql`INSERT INTO agent_tokens (id, user_id, name, token_hash, created_at) VALUES (${id}, ${userId}, ${name}, ${tokenHash}, ${Date.now()})`
+  async createToken(id: string, userId: string, name: string, tokenHash: string, expiresAt: number | null, rotatedFrom?: string): Promise<void> {
+    await sql`
+      INSERT INTO agent_tokens (id, user_id, name, token_hash, created_at, expires_at, rotated_from)
+      VALUES (${id}, ${userId}, ${name}, ${tokenHash}, ${Date.now()}, ${expiresAt}, ${rotatedFrom ?? null})
+    `
   },
 
-  async listTokens(userId: string): Promise<Array<{ id: string; name: string; createdAt: number }>> {
-    const rows = await sql`SELECT id, name, created_at FROM agent_tokens WHERE user_id = ${userId} ORDER BY created_at DESC`
-    return rows.map((r) => ({ id: r.id, name: r.name, createdAt: Number(r.created_at) }))
+  async listTokens(userId: string): Promise<Array<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number }>> {
+    const rows = await sql`
+      SELECT id, name, created_at, expires_at, last_used_at
+      FROM agent_tokens
+      WHERE user_id = ${userId} AND revoked_at IS NULL
+      ORDER BY created_at DESC
+    `
+    return rows.map((r) => ({
+      id:         r.id,
+      name:       r.name,
+      createdAt:  Number(r.created_at),
+      expiresAt:  r.expires_at != null ? Number(r.expires_at) : undefined,
+      lastUsedAt: r.last_used_at != null ? Number(r.last_used_at) : undefined,
+    }))
   },
 
-  async deleteToken(id: string, userId: string): Promise<boolean> {
-    const result = await sql`DELETE FROM agent_tokens WHERE id = ${id} AND user_id = ${userId}`
+  async revokeToken(id: string, userId: string): Promise<boolean> {
+    const result = await sql`
+      UPDATE agent_tokens SET revoked_at = ${Date.now()}
+      WHERE id = ${id} AND user_id = ${userId} AND revoked_at IS NULL
+    `
     return result.count > 0
   },
 
+  async getToken(id: string, userId: string): Promise<{ id: string; name: string } | undefined> {
+    const [row] = await sql`
+      SELECT id, name FROM agent_tokens
+      WHERE id = ${id} AND user_id = ${userId} AND revoked_at IS NULL
+    `
+    return row ? { id: row.id, name: row.name } : undefined
+  },
+
   async getUserIdByToken(tokenHash: string): Promise<string | undefined> {
-    const [row] = await sql`SELECT user_id FROM agent_tokens WHERE token_hash = ${tokenHash}`
+    const now = Date.now()
+    const [row] = await sql`
+      SELECT id, user_id, expires_at, revoked_at
+      FROM agent_tokens
+      WHERE token_hash = ${tokenHash}
+    `
+    if (!row || row.revoked_at != null) return undefined
+    if (row.expires_at != null && Number(row.expires_at) <= now) return undefined
+    await sql`UPDATE agent_tokens SET last_used_at = ${now} WHERE id = ${row.id}`
     return row?.user_id
+  },
+}
+
+// ── Audit log ────────────────────────────────────────────────────────────────
+
+export interface AuditEntry {
+  id:         string
+  userId?:    string
+  action:     string
+  actorType:  string
+  actorId?:   string
+  ip?:        string
+  userAgent?: string
+  targetType?: string
+  targetId?:   string
+  metadata:   Record<string, unknown>
+  createdAt:  number
+}
+
+function rowToAuditEntry(row: Record<string, unknown>): AuditEntry {
+  return {
+    id:         String(row.id),
+    userId:     (row.user_id as string) ?? undefined,
+    action:     row.action as string,
+    actorType:  row.actor_type as string,
+    actorId:    (row.actor_id as string) ?? undefined,
+    ip:         (row.ip as string) ?? undefined,
+    userAgent:  (row.user_agent as string) ?? undefined,
+    targetType: (row.target_type as string) ?? undefined,
+    targetId:   (row.target_id as string) ?? undefined,
+    metadata:   parseAuditMetadata(row.metadata),
+    createdAt:  Number(row.created_at),
+  }
+}
+
+function parseAuditMetadata(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'string') return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+export const auditDb = {
+  async record(entry: Omit<AuditEntry, 'id' | 'createdAt' | 'metadata'> & { metadata?: Record<string, unknown> }): Promise<void> {
+    await sql`
+      INSERT INTO audit_log
+        (user_id, action, actor_type, actor_id, ip, user_agent, target_type, target_id, metadata, created_at)
+      VALUES
+        (${entry.userId ?? null}, ${entry.action}, ${entry.actorType}, ${entry.actorId ?? null},
+         ${entry.ip ?? null}, ${entry.userAgent ?? null}, ${entry.targetType ?? null}, ${entry.targetId ?? null},
+         ${JSON.stringify(entry.metadata ?? {})}, ${Date.now()})
+    `
+  },
+
+  async listForUser(userId: string, limit = 100): Promise<AuditEntry[]> {
+    const rows = await sql`
+      SELECT id, user_id, action, actor_type, actor_id, ip, user_agent, target_type, target_id, metadata, created_at
+      FROM audit_log
+      WHERE user_id = ${userId}
+      ORDER BY created_at DESC
+      LIMIT ${Math.min(Math.max(limit, 1), 500)}
+    `
+    return rows.map(rowToAuditEntry)
   },
 }
 

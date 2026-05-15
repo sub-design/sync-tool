@@ -70,6 +70,10 @@ SYNC_ENCRYPTION_KEY_FILE=/path/to/sync-tool.key
 # Relay namespaces. Agents using token-a can only see and route to other
 # devices in scope-a; they cannot address scope-b devices.
 RELAY_TOKENS=scope-a:token-a,scope-b:token-b
+
+# New agent tokens expire after this many days. Existing tokens without an
+# expiry remain valid until revoked or rotated.
+AGENT_TOKEN_TTL_DAYS=90
 ```
 
 New jobs enable AES-256-GCM file encryption by default. Existing jobs keep
@@ -79,6 +83,11 @@ their stored setting. Generate a key file with:
 openssl rand -hex 32 > /path/to/sync-tool.key
 chmod 600 /path/to/sync-tool.key
 ```
+
+Agent tokens can be rotated from the Devices page. Rotation creates a new token
+with the same name and revokes the old token. Security events are recorded in
+the audit log and visible at `/audit`; the same data is available through
+`GET /api/audit`.
 
 ---
 

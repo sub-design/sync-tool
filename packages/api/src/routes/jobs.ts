@@ -2,6 +2,7 @@ import { Router, type Router as ExpressRouter } from 'express'
 import { v4 as uuid } from 'uuid'
 import { jobsDb, logDb } from '../db'
 import { requireAuth } from '../middleware/requireAuth'
+import { auditRequest } from '../audit'
 import type { ServerToAgent } from '@sync-tool/shared'
 
 export function createJobsRouter(
@@ -43,6 +44,11 @@ export function createJobsRouter(
       req.userId,
     )
     onJobsChanged()
+    auditRequest(req, 'job.created', {
+      targetType: 'job',
+      targetId:   job.id,
+      metadata:   { name: job.name, sourceDeviceId, destinationDeviceId, watch: Boolean(watch), schedule },
+    })
     res.status(201).json(job)
   })
 
@@ -53,6 +59,11 @@ export function createJobsRouter(
     const job = await jobsDb.update(req.params.id, req.body)
     if (!job) { res.status(404).json({ error: 'Job not found' }); return }
     onJobsChanged()
+    auditRequest(req, 'job.updated', {
+      targetType: 'job',
+      targetId:   job.id,
+      metadata:   { fields: Object.keys(req.body ?? {}) },
+    })
     res.json(job)
   })
 
@@ -63,6 +74,10 @@ export function createJobsRouter(
     const ok = await jobsDb.delete(req.params.id)
     if (!ok) { res.status(404).json({ error: 'Job not found' }); return }
     onJobsChanged()
+    auditRequest(req, 'job.deleted', {
+      targetType: 'job',
+      targetId:   req.params.id,
+    })
     res.json({ ok: true })
   })
 
@@ -75,6 +90,11 @@ export function createJobsRouter(
       res.status(409).json({ error: 'Job is already running or queued' }); return
     }
     broadcast({ type: 'job:run', job })
+    auditRequest(req, 'job.run_requested', {
+      targetType: 'job',
+      targetId:   job.id,
+      metadata:   { name: job.name },
+    })
     res.json({ ok: true, jobId: job.id })
   })
 
@@ -88,6 +108,10 @@ export function createJobsRouter(
     }
     await jobsDb.setStatus(job.id, 'cancelled')
     broadcast({ type: 'job:cancel', jobId: job.id })
+    auditRequest(req, 'job.cancel_requested', {
+      targetType: 'job',
+      targetId:   job.id,
+    })
     res.json({ ok: true, jobId: job.id })
   })
 
@@ -161,6 +185,11 @@ export function createJobsRouter(
     }
 
     pendingRollbacks.set(job.id, logId)
+    auditRequest(req, 'job.rollback_requested', {
+      targetType: 'job',
+      targetId:   job.id,
+      metadata:   { logId, deviceId: data.deviceId },
+    })
     res.json({ ok: true, logId })
   })
 
