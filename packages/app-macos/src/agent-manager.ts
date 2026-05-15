@@ -2,7 +2,7 @@ import { ChildProcess, spawn } from 'child_process'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
-import { getConfig } from './config'
+import { agentWsUrl, getConfig } from './config'
 
 export type AgentStatus = 'stopped' | 'starting' | 'running' | 'error'
 
@@ -79,7 +79,7 @@ function _spawnAgent(): void {
     env: {
       ...process.env,
       ...extraEnv,
-      API_URL:      `${cfg.wsUrl}/agent`,
+      API_URL:      agentWsUrl(cfg.wsUrl),
       AGENT_TOKEN:  cfg.agentToken,
       DEVICE_ID:    cfg.deviceId,
     },

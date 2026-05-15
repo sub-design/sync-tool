@@ -1,5 +1,5 @@
 import WebSocket from 'ws'
-import { getConfig } from './config'
+import { browserWsUrl, getConfig } from './config'
 import type { ServerToBrowser, Job, JobStatus } from '@sync-tool/shared'
 
 export interface JobState {
@@ -80,7 +80,7 @@ export function connect(): void {
 
   setConnectionState('connecting')
 
-  ws = new WebSocket(cfg.wsUrl, {
+  ws = new WebSocket(browserWsUrl(cfg.wsUrl), {
     headers: { Authorization: `Bearer ${cfg.agentToken}` },
   })
 
