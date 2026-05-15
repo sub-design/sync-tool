@@ -21,8 +21,8 @@ const P2P_TIMEOUT_MS = 15_000
 const CHANNEL_LABEL  = 'sync-tool'
 
 interface PeerState {
-  pc:    PeerConnection
-  dc?:   DataChannel
+  pc:    any
+  dc?:   any
   ready: boolean
 }
 
@@ -91,17 +91,17 @@ export class P2pManager {
     const peer: PeerState = { pc, ready: false }
     this.peers.set(peerId, peer)
 
-    pc.onLocalDescription((sdp, type) => {
+    pc.onLocalDescription((sdp: string, type: string) => {
       if (type === 'offer' || type === 'answer') {
         this.sendSignal(peerId, { kind: type, sdp })
       }
     })
 
-    pc.onLocalCandidate((candidate, mid) => {
+    pc.onLocalCandidate((candidate: string, mid: string) => {
       this.sendSignal(peerId, { kind: 'ice', candidate, mid })
     })
 
-    pc.onStateChange((state) => {
+    pc.onStateChange((state: string) => {
       if (state === 'failed' || state === 'disconnected') {
         console.log(`[p2p] ${shortId(peerId)} ${state} — falling back to relay`)
         this.teardown(peerId)
@@ -113,14 +113,14 @@ export class P2pManager {
       peer.dc = dc
       this.wireChannel(peerId, peer, dc)
     } else {
-      pc.onDataChannel((dc) => {
+      pc.onDataChannel((dc: any) => {
         peer.dc = dc
         this.wireChannel(peerId, peer, dc)
       })
     }
   }
 
-  private wireChannel(peerId: string, peer: PeerState, dc: DataChannel) {
+  private wireChannel(peerId: string, peer: PeerState, dc: any) {
     const shortId = peerId.slice(0, 8)
     const timeout = setTimeout(() => {
       if (!peer.ready) {
@@ -135,7 +135,7 @@ export class P2pManager {
       console.log(`[p2p] Direct channel open with ${shortId} ✓`)
     })
 
-    dc.onMessage((msg) => {
+    dc.onMessage((msg: string | Buffer | ArrayBuffer) => {
       const payload = typeof msg === 'string'
         ? msg
         : Buffer.isBuffer(msg) ? msg.toString() : Buffer.from(msg as ArrayBuffer).toString()
@@ -150,7 +150,7 @@ export class P2pManager {
       }
     })
 
-    dc.onError((err) => {
+    dc.onError((err: unknown) => {
       clearTimeout(timeout)
       console.error(`[p2p] Channel error with ${shortId}:`, err)
     })

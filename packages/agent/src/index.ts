@@ -4,8 +4,9 @@ import path from 'path'
 import { WebSocket } from 'ws'
 import { v4 as uuid } from 'uuid'
 import pLimit from 'p-limit'
-import { runSync } from './sync'
+import { runSync, performRollback } from './sync'
 import { resolveBackend } from './backends/resolve'
+import { assertAllowedLocalEndpoint, assertAllowedPath } from './fileGuard'
 import { RelayClient } from './relayClient'
 import { canRunRemoteDelta, isRemoteDeltaJob, registerRemoteDeltaHandlers, runRemoteDeltaSync } from './delta/remote'
 import { stateDb } from './state'
@@ -21,11 +22,6 @@ const RELAY_URL    = process.env.RELAY_URL
 const RELAY_TOKEN  = process.env.RELAY_TOKEN  // shared secret for relay auth
 const RECONNECT_MS = 5_000
 const DEFAULT_CONCURRENCY = Math.max(1, parseInt(process.env.AGENT_CONCURRENCY ?? '2', 10))
-
-// Append auth token to WS URL
-const API_WS_URL = AGENT_TOKEN
-  ? `${API_WS_BASE}${API_WS_BASE.includes('?') ? '&' : '?'}token=${encodeURIComponent(AGENT_TOKEN)}`
-  : API_WS_BASE
 
 if (!AGENT_TOKEN) {
   console.warn('[agent] AGENT_TOKEN not set — connection will be rejected by authenticated servers')
@@ -59,7 +55,9 @@ const watcher = new JobWatcher(DEVICE_ID, (jobId, changedPath) => {
 // ── WebSocket connection ──────────────────────────────────────────────────────
 
 function connect() {
-  const ws = new WebSocket(API_WS_URL)
+  const ws = new WebSocket(API_WS_BASE, AGENT_TOKEN
+    ? { headers: { Authorization: `Bearer ${AGENT_TOKEN}` } }
+    : undefined)
 
   ws.on('open', () => {
     activeWs = ws
@@ -102,6 +100,10 @@ function connect() {
 
       case 'browse:request':
         await handleBrowse(ws, msg.requestId, msg.path)
+        break
+
+      case 'job:rollback':
+        void handleRollback(ws, msg.job, msg.logId, msg.manifest)
         break
     }
   })
@@ -152,7 +154,7 @@ async function executeJob(ws: WebSocket, job: Job) {
     const result = await runJob(job, onProgress, controller.signal)
 
     process.stdout.write('\n')
-    console.log(`[agent] Job complete: ${result.filesCopied} copied, ${result.filesSkipped} skipped, ${result.filesErrored} errors`)
+    console.log(`[agent] Job complete: ${result.filesCopied} copied, ${result.filesDeleted ?? 0} deleted, ${result.filesSkipped} skipped, ${result.filesErrored} errors`)
 
     send(ws, { type: 'job:complete', result })
   } catch (err: any) {
@@ -182,6 +184,11 @@ async function runJob(job: Job, onProgress: (progress: any) => void, signal: Abo
 }
 
 async function runLocalSync(job: Job, onProgress: (progress: any) => void, signal: AbortSignal) {
+  await Promise.all([
+    assertAllowedLocalEndpoint(job.source),
+    assertAllowedLocalEndpoint(job.destination),
+  ])
+
   const source = resolveBackend(job.source)
   const destination = resolveBackend(job.destination)
 
@@ -197,16 +204,46 @@ async function runLocalSync(job: Job, onProgress: (progress: any) => void, signa
   )
 }
 
+// ── Rollback ──────────────────────────────────────────────────────────────────
+
+async function handleRollback(ws: WebSocket, job: Job, logId: string, manifest: import('@sync-tool/shared').RollbackManifest) {
+  console.log(`[agent] Starting rollback for job "${job.name}", logId=${logId}`)
+  try {
+    const source      = resolveBackend(job.source)
+    const destination = resolveBackend(job.destination)
+
+    const result = await performRollback(
+      manifest,
+      source.backend,
+      destination.backend,
+      source.rootPath,
+      destination.rootPath,
+      (progress) => {
+        send(ws, {
+          type:          'job:rollback:progress',
+          jobId:         job.id,
+          filesRestored: progress.filesRestored,
+          filesTotal:    progress.filesTotal,
+          currentFile:   progress.currentFile,
+        })
+      },
+    )
+
+    send(ws, { type: 'job:rollback:complete', jobId: job.id, result })
+  } catch (err: any) {
+    console.error(`[agent] Rollback failed for logId=${logId}:`, err.message)
+    send(ws, { type: 'job:rollback:error', jobId: job.id, error: err.message })
+  }
+}
+
 // ── Directory browse ──────────────────────────────────────────────────────────
 
 async function handleBrowse(ws: WebSocket, requestId: string, rawPath: string) {
-  const resolved = rawPath === '~' || rawPath === ''
-    ? os.homedir()
-    : rawPath.startsWith('~/')
-      ? path.join(os.homedir(), rawPath.slice(2))
-      : rawPath
+  let resolved = rawPath
 
   try {
+    const allowed = await assertAllowedPath(rawPath)
+    resolved = allowed.resolvedPath
     const dirents = await fs.promises.readdir(resolved, { withFileTypes: true })
     const entries: DirEntry[] = await Promise.all(
       dirents.map(async (d) => {

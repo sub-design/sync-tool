@@ -1,9 +1,11 @@
 import { useState } from 'react'
-import { CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
+import { CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronRight, RotateCcw, Loader2 } from 'lucide-react'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { formatRelative, formatDuration, formatBytes } from '@/lib/format'
 
 export interface SyncLogEntry {
@@ -14,15 +16,21 @@ export interface SyncLogEntry {
   started_at:       number
   ended_at:         number | null
   files_copied:     number
+  files_deleted:    number
   files_skipped:    number
   files_errored:    number
   bytes_transferred: number
   logical_bytes:    number
   errors:           string   // JSON array of per-file error strings
+  rollback_status?: 'none' | 'available' | 'used' | 'expired' | null
+  is_rollback?:     boolean
+  rollback_of?:     number | null
 }
 
 interface SyncLogTableProps {
-  entries: SyncLogEntry[]
+  entries:           SyncLogEntry[]
+  onRollback?:       (entry: SyncLogEntry) => void
+  rollbackingLogId?: string
 }
 
 function StatusIcon({ entry }: { entry: SyncLogEntry }) {
@@ -42,7 +50,7 @@ function StatusIcon({ entry }: { entry: SyncLogEntry }) {
   return <CheckCircle2 className="text-green-600" size={16} />
 }
 
-export default function SyncLogTable({ entries }: SyncLogTableProps) {
+export default function SyncLogTable({ entries, onRollback, rollbackingLogId }: SyncLogTableProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   if (entries.length === 0) {
@@ -69,9 +77,11 @@ export default function SyncLogTable({ entries }: SyncLogTableProps) {
           <TableHead>Started</TableHead>
           <TableHead>Duration</TableHead>
           <TableHead>Copied</TableHead>
+          <TableHead>Deleted</TableHead>
           <TableHead>Skipped</TableHead>
           <TableHead>Size</TableHead>
           <TableHead className="w-8" />
+          <TableHead className="w-24" />
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -89,17 +99,26 @@ export default function SyncLogTable({ entries }: SyncLogTableProps) {
           const isExpanded   = expanded.has(entry.id)
           const duration     = entry.ended_at ? entry.ended_at - entry.started_at : null
 
+          const isRollbackRow = entry.is_rollback === true
+          const canRollback  = !isRollbackRow && entry.rollback_status === 'available' && !!onRollback
+          const isRollingBack = rollbackingLogId === entry.id
+
           return [
             <TableRow
               key={entry.id}
-              className={isExpandable ? 'cursor-pointer select-none' : undefined}
-              onClick={isExpandable ? () => toggle(entry.id) : undefined}
+              className={[
+                isExpandable ? 'cursor-pointer select-none' : '',
+                isRollbackRow ? 'bg-violet-50 dark:bg-violet-950/20' : '',
+              ].filter(Boolean).join(' ')}
+              onClick={isExpandable && !isRollbackRow ? () => toggle(entry.id) : undefined}
             >
               {/* Expand chevron */}
               <TableCell className="pr-0 text-muted-foreground">
-                {isExpandable
-                  ? (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />)
-                  : null}
+                {isRollbackRow
+                  ? <RotateCcw size={13} className="text-violet-500" />
+                  : isExpandable
+                    ? (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />)
+                    : null}
               </TableCell>
 
               {/* Started */}
@@ -124,6 +143,9 @@ export default function SyncLogTable({ entries }: SyncLogTableProps) {
               {/* Copied */}
               <TableCell className="text-sm">{entry.files_copied}</TableCell>
 
+              {/* Deleted */}
+              <TableCell className="text-sm">{entry.files_deleted ?? 0}</TableCell>
+
               {/* Skipped */}
               <TableCell className="text-sm text-muted-foreground">{entry.files_skipped}</TableCell>
 
@@ -147,14 +169,34 @@ export default function SyncLogTable({ entries }: SyncLogTableProps) {
 
               {/* Status icon */}
               <TableCell>
-                <StatusIcon entry={entry} />
+                {isRollbackRow
+                  ? <Badge variant="outline" className="border-violet-300 text-violet-600 text-xs">rollback</Badge>
+                  : <StatusIcon entry={entry} />}
+              </TableCell>
+
+              {/* Rollback action */}
+              <TableCell onClick={e => e.stopPropagation()}>
+                {canRollback && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    disabled={isRollingBack}
+                    onClick={() => onRollback(entry)}
+                  >
+                    {isRollingBack
+                      ? <Loader2 size={12} className="animate-spin" />
+                      : <RotateCcw size={12} />}
+                    Rollback
+                  </Button>
+                )}
               </TableCell>
             </TableRow>,
 
             /* Expandable error panel */
-            isExpanded && (
+            isExpanded && !isRollbackRow && (
               <TableRow key={`${entry.id}-detail`} className="hover:bg-transparent">
-                <TableCell colSpan={7} className="pt-0 pb-2 px-4">
+                <TableCell colSpan={9} className="pt-0 pb-2 px-4">
                   <pre className="overflow-auto max-h-32 rounded-md bg-destructive/5 border border-destructive/20 px-3 py-2 font-mono text-xs text-destructive leading-relaxed whitespace-pre-wrap">
                     {expandContent.join('\n')}
                   </pre>

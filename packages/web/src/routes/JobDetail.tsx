@@ -15,6 +15,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import SyncLogTable, { type SyncLogEntry } from '@/components/SyncLogTable'
+import type { RollbackPreview } from '@/lib/api'
 import JobForm from '@/components/JobForm'
 import { useWsStore, subscribe } from '@/lib/ws'
 import { formatRelative, formatBytes } from '@/lib/format'
@@ -58,6 +59,10 @@ export default function JobDetail() {
 
   const [editOpen, setEditOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [rollbackEntry, setRollbackEntry] = useState<SyncLogEntry | null>(null)
+  const [rollbackPreview, setRollbackPreview] = useState<RollbackPreview | null>(null)
+  const [rollbackLoading, setRollbackLoading] = useState(false)
+  const [rollbackingLogId, setRollbackingLogId] = useState<string | undefined>()
 
   const { data: job } = useQuery({
     queryKey: ['job', id],
@@ -83,6 +88,12 @@ export default function JobDetail() {
       subscribe('job:complete', msg => { if (msg.result.jobId === id) invalidate() }),
       subscribe('job:cancelled', msg => { if (msg.jobId === id) invalidate() }),
       subscribe('job:error', msg => { if (msg.jobId === id) invalidate() }),
+      subscribe('job:rollback:complete', msg => {
+        if (msg.jobId === id) { setRollbackingLogId(undefined); invalidate() }
+      }),
+      subscribe('job:rollback:error', msg => {
+        if (msg.jobId === id) { setRollbackingLogId(undefined); invalidate() }
+      }),
     ]
     return () => unsubs.forEach(fn => fn())
   }, [id, queryClient])
@@ -103,6 +114,26 @@ export default function JobDetail() {
     if (!id) return
     await api.deleteJob(id)
     navigate('/')
+  }
+
+  async function handleRollbackRequest(entry: SyncLogEntry) {
+    if (!id) return
+    setRollbackLoading(true)
+    try {
+      const preview = await api.getRollbackPreview(id, entry.id)
+      setRollbackPreview(preview)
+      setRollbackEntry(entry)
+    } finally {
+      setRollbackLoading(false)
+    }
+  }
+
+  async function handleRollbackConfirm() {
+    if (!id || !rollbackEntry) return
+    await api.triggerRollback(id, rollbackEntry.id)
+    setRollbackingLogId(rollbackEntry.id)
+    setRollbackEntry(null)
+    setRollbackPreview(null)
   }
 
   const isActive = job?.status === 'running' || job?.status === 'queued'
@@ -215,7 +246,11 @@ export default function JobDetail() {
             {/* Sync history */}
             <div className="space-y-2">
               <h3 className="text-sm font-medium text-muted-foreground">Sync history</h3>
-              <SyncLogTable entries={logData ?? []} />
+              <SyncLogTable
+                entries={logData ?? []}
+                onRollback={handleRollbackRequest}
+                rollbackingLogId={rollbackingLogId}
+              />
             </div>
 
             {/* Edit dialog */}
@@ -232,6 +267,38 @@ export default function JobDetail() {
                 />
               </DialogContent>
             </Dialog>
+
+            {/* Rollback confirmation dialog */}
+            <AlertDialog open={!!rollbackEntry} onOpenChange={open => { if (!open) { setRollbackEntry(null); setRollbackPreview(null) } }}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Rollback this sync run?</AlertDialogTitle>
+                  <AlertDialogDescription asChild>
+                    <div className="space-y-2 text-sm">
+                      {rollbackPreview && (
+                        <>
+                          <p>
+                            {rollbackPreview.filesToRestore.length > 0 && (
+                              <span>{rollbackPreview.filesToRestore.length} file{rollbackPreview.filesToRestore.length !== 1 ? 's' : ''} will be restored to their previous version. </span>
+                            )}
+                            {rollbackPreview.filesToDelete.length > 0 && (
+                              <span>{rollbackPreview.filesToDelete.length} file{rollbackPreview.filesToDelete.length !== 1 ? 's' : ''} created by this sync will be deleted.</span>
+                            )}
+                          </p>
+                          <p className="text-amber-600">This action cannot be undone.</p>
+                        </>
+                      )}
+                    </div>
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleRollbackConfirm}>
+                    Rollback
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
 
             {/* Delete alert dialog */}
             <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>

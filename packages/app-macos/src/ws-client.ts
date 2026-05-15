@@ -80,8 +80,9 @@ export function connect(): void {
 
   setConnectionState('connecting')
 
-  const url = `${cfg.wsUrl}?token=${encodeURIComponent(cfg.agentToken)}`
-  ws = new WebSocket(url)
+  ws = new WebSocket(cfg.wsUrl, {
+    headers: { Authorization: `Bearer ${cfg.agentToken}` },
+  })
 
   ws.on('open', () => {
     reconnectAttempt = 0

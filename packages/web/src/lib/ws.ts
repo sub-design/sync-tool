@@ -17,8 +17,7 @@ function connect() {
   const token = getToken()
   if (!token) return  // Don't connect if not logged in
 
-  const url = `${WS_BASE}?token=${encodeURIComponent(token)}`
-  ws = new WebSocket(url)
+  ws = new WebSocket(WS_BASE, [`auth.${base64Url(token)}`])
 
   ws.onmessage = (event: MessageEvent) => {
     try {
@@ -34,6 +33,13 @@ function connect() {
     if (getToken()) setTimeout(connect, 3000)
   }
   ws.onerror = () => { ws?.close() }
+}
+
+function base64Url(value: string): string {
+  return btoa(value)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '')
 }
 
 connect()

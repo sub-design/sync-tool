@@ -100,3 +100,19 @@ export function browseDir(deviceId: string, path: string): Promise<{ path: strin
   const qs = new URLSearchParams({ deviceId, path })
   return apiFetch(`/api/browse?${qs}`)
 }
+
+export interface RollbackPreview {
+  logId: number
+  status: string
+  totalFiles: number
+  filesToRestore: Array<{ relativePath: string; action: string; prevSize: number | null }>
+  filesToDelete:  Array<{ relativePath: string }>
+}
+
+export function getRollbackPreview(jobId: string, logId: string): Promise<RollbackPreview> {
+  return apiFetch(`/api/jobs/${jobId}/log/${logId}/rollback`)
+}
+
+export function triggerRollback(jobId: string, logId: string): Promise<{ ok: boolean; logId: number }> {
+  return apiFetch(`/api/jobs/${jobId}/log/${logId}/rollback`, { method: 'POST' })
+}

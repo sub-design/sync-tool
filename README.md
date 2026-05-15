@@ -38,7 +38,7 @@ pnpm dev:api
 
 **Terminal 2 — Agent** (runs on the machine that does the actual syncing)
 ```bash
-pnpm dev:agent
+AGENT_TOKEN=<token from Devices> pnpm dev:agent
 # Connects to API server, waits for jobs
 ```
 
@@ -46,8 +46,38 @@ pnpm dev:agent
 
 **Optional: Relay server** (deploy on a VPS with a public IP)
 ```bash
-pnpm dev:relay
+RELAY_TOKENS=home:$(openssl rand -hex 32) pnpm dev:relay
 # Runs on port 3002
+```
+
+## Production security baseline
+
+Production deployments should terminate TLS at a reverse proxy or managed
+platform and expose only `https://` REST URLs and `wss://` WebSocket URLs.
+Set these environment variables for public deployments:
+
+```bash
+REQUIRE_SECURE_TRANSPORT=true
+ALLOW_LEGACY_WS_QUERY_TOKEN=false
+
+# Agent filesystem sandbox. Default is the user's home directory; add external
+# disks or backup roots explicitly.
+SYNC_ALLOWED_ROOTS=/Users/alex:/Volumes/Backup
+
+# Preferred over putting encryption keys directly in process env.
+SYNC_ENCRYPTION_KEY_FILE=/path/to/sync-tool.key
+
+# Relay namespaces. Agents using token-a can only see and route to other
+# devices in scope-a; they cannot address scope-b devices.
+RELAY_TOKENS=scope-a:token-a,scope-b:token-b
+```
+
+New jobs enable AES-256-GCM file encryption by default. Existing jobs keep
+their stored setting. Generate a key file with:
+
+```bash
+openssl rand -hex 32 > /path/to/sync-tool.key
+chmod 600 /path/to/sync-tool.key
 ```
 
 ---

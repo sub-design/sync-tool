@@ -2,7 +2,7 @@ import path     from 'path'
 import os       from 'os'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 
-const STATE_DIR = process.env.STATE_DIR
+export const STATE_DIR = process.env.STATE_DIR
   ?? (process.platform === 'darwin'
       ? path.join(os.homedir(), 'Library', 'Application Support', 'SyncTool')
       : path.join(os.homedir(), '.synctool'))

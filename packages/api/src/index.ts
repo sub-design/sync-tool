@@ -7,6 +7,7 @@ import { createJobsRouter } from './routes/jobs'
 import { createAuthRouter } from './routes/auth'
 import { createDevicesRouter } from './routes/devices'
 import { authFromWsRequest, requireAuth } from './middleware/requireAuth'
+import { hitRateLimit } from './rateLimit'
 import { notifyJob } from './notifications'
 import { schedulerPollMs, shouldRunNow } from './scheduler'
 import type { AgentToServer, ServerToAgent, ServerToBrowser, Job, DirEntry } from '@sync-tool/shared'
@@ -18,6 +19,13 @@ const PORT = parseInt(process.env.PORT ?? '3001', 10)
 const app = express()
 app.use(cors())
 app.use(express.json())
+app.use((req, res, next) => {
+  if (!secureTransportRequired() || requestArrivedSecurely(req)) {
+    next()
+    return
+  }
+  res.status(403).json({ error: 'Secure transport required' })
+})
 
 // ── WebSocket servers ─────────────────────────────────────────────────────────
 
@@ -26,6 +34,19 @@ const agentWss   = new WebSocketServer({ noServer: true })
 const browserWss = new WebSocketServer({ noServer: true })
 
 server.on('upgrade', (req, socket, head) => {
+  if (secureTransportRequired() && !upgradeArrivedSecurely(req)) {
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+    socket.destroy()
+    return
+  }
+
+  const authKey = `ws-auth:${wsRateLimitAddress(req)}`
+  if (hitRateLimit(authKey, 15 * 60_000, 60)) {
+    socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n')
+    socket.destroy()
+    return
+  }
+
   authFromWsRequest(req).then((userId) => {
     if (!userId) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
@@ -43,6 +64,41 @@ server.on('upgrade', (req, socket, head) => {
   })
 })
 
+function secureTransportRequired(): boolean {
+  return process.env.REQUIRE_SECURE_TRANSPORT === 'true'
+}
+
+function requestArrivedSecurely(req: express.Request): boolean {
+  return isLocalAddress(req.socket.remoteAddress) || forwardedProto(req).some(isSecureProto)
+}
+
+function upgradeArrivedSecurely(req: http.IncomingMessage): boolean {
+  return isLocalAddress(req.socket.remoteAddress) || forwardedProto(req).some(isSecureProto)
+}
+
+function forwardedProto(req: express.Request | http.IncomingMessage): string[] {
+  const raw = req.headers['x-forwarded-proto']
+  const values = Array.isArray(raw) ? raw : [raw]
+  return values
+    .filter((value): value is string => typeof value === 'string')
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim().toLowerCase())
+}
+
+function isSecureProto(proto: string): boolean {
+  return proto === 'https' || proto === 'wss'
+}
+
+function isLocalAddress(address: string | undefined): boolean {
+  return !address || address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+}
+
+function wsRateLimitAddress(req: http.IncomingMessage): string {
+  const forwarded = req.headers['x-forwarded-for']
+  const firstForwarded = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0]
+  return (firstForwarded || req.socket.remoteAddress || 'unknown').trim()
+}
+
 // ── Agent registry ────────────────────────────────────────────────────────────
 
 interface AgentConn {
@@ -50,6 +106,9 @@ interface AgentConn {
 }
 
 const agents = new Map<string, AgentConn>()
+
+// jobId → logId for in-flight rollbacks (correlates agent response with DB row)
+const pendingRollbacks = new Map<string, number>()
 
 // ── Pending browse requests ────────────────────────────────────────────────────
 
@@ -169,10 +228,14 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: st
         const job  = await jobsDb.get(result.jobId)
         const jUid = await jobsDb.getUserId(result.jobId)
         await jobsDb.setStatus(result.jobId, 'completed')
-        await logDb.complete(await logDb.create(result.jobId), result)
+        const logId = await logDb.create(result.jobId)
+        await logDb.complete(logId, result)
+        if (result.rollbackManifest && deviceId) {
+          await logDb.saveRollbackManifest(logId, result.rollbackManifest, deviceId)
+        }
         broadcastToBrowsers({ type: 'job:complete', result }, jUid)
         void notifyJob(job, { status: 'completed', result })
-        console.log(`[api] Job ${result.jobId} completed — ${result.filesCopied} files`)
+        console.log(`[api] Job ${result.jobId} completed — ${result.filesCopied} copied, ${result.filesDeleted ?? 0} deleted`)
         break
       }
       case 'job:cancelled': {
@@ -201,6 +264,54 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: st
           browsePending.delete(msg.requestId)
           pending.resolve({ path: msg.path, entries: msg.entries, error: msg.error })
         }
+        break
+      }
+
+      case 'job:rollback:progress': {
+        const jUid = await jobsDb.getUserId(msg.jobId)
+        broadcastToBrowsers({
+          type:          'job:rollback:progress',
+          jobId:         msg.jobId,
+          filesRestored: msg.filesRestored,
+          filesTotal:    msg.filesTotal,
+          currentFile:   msg.currentFile,
+        }, jUid)
+        break
+      }
+
+      case 'job:rollback:complete': {
+        const jUid  = await jobsDb.getUserId(msg.jobId)
+        const logId = pendingRollbacks.get(msg.jobId)
+        if (logId !== undefined) {
+          await logDb.createRollbackRun(msg.jobId, logId, msg.result)
+          pendingRollbacks.delete(msg.jobId)
+        }
+        await jobsDb.setStatus(msg.jobId, 'completed')
+        broadcastToBrowsers({
+          type:   'job:rollback:complete',
+          jobId:  msg.jobId,
+          logId:  String(logId ?? ''),
+          result: msg.result,
+        }, jUid)
+        console.log(`[api] Rollback for job ${msg.jobId} complete — ${msg.result.filesRestored} restored`)
+        break
+      }
+
+      case 'job:rollback:error': {
+        const jUid = await jobsDb.getUserId(msg.jobId)
+        const logId = pendingRollbacks.get(msg.jobId)
+        if (logId !== undefined) {
+          // Re-mark as available so user can retry
+          await logDb.resetRollbackToAvailable(logId)
+          pendingRollbacks.delete(msg.jobId)
+        }
+        broadcastToBrowsers({
+          type:  'job:rollback:error',
+          jobId: msg.jobId,
+          logId: String(logId ?? ''),
+          error: msg.error,
+        }, jUid)
+        console.error(`[api] Rollback for job ${msg.jobId} failed: ${msg.error}`)
         break
       }
     }
@@ -241,13 +352,18 @@ async function checkScheduledJobs(): Promise<void> {
 
 app.use('/api/auth',    createAuthRouter())
 app.use('/api/devices', createDevicesRouter())
-app.use('/api/jobs',    createJobsRouter(async (msg) => {
-  if (msg.type === 'job:run')    await queueJob(msg.job, 'manual')
-  if (msg.type === 'job:cancel') {
-    broadcastJobCancel(msg.jobId)
-    broadcastToBrowsers({ type: 'job:cancelled', jobId: msg.jobId })
-  }
-}, () => { void broadcastWatchConfig() }))
+app.use('/api/jobs',    createJobsRouter(
+  async (msg) => {
+    if (msg.type === 'job:run')    await queueJob(msg.job, 'manual')
+    if (msg.type === 'job:cancel') {
+      broadcastJobCancel(msg.jobId)
+      broadcastToBrowsers({ type: 'job:cancelled', jobId: msg.jobId })
+    }
+  },
+  sendToAgent,
+  pendingRollbacks,
+  () => { void broadcastWatchConfig() },
+))
 
 app.get('/api/browse', requireAuth, async (req, res) => {
   const userId   = req.userId
