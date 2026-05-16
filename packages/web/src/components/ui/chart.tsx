@@ -129,6 +129,7 @@ function ChartTooltipContent({
   color?: string;
   nameKey?: string;
   labelKey?: string;
+  labelClassName?: string;
   hideLabel?: boolean;
   hideIndicator?: boolean;
   indicator?: "line" | "dot" | "dashed";
