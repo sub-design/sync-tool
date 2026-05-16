@@ -1,4 +1,42 @@
 // ─────────────────────────────────────────────
+//  Endpoint types
+// ─────────────────────────────────────────────
+
+export type EndpointType = 'local' | 'sftp' | 'ftp' | 'ftps' | 's3' | 'smb' | 'nfs'
+
+export interface SavedEndpointConfig {
+  // Local / mounted
+  path?: string
+  // Remote common
+  host?: string
+  port?: number
+  username?: string
+  password?: string       // masked in API responses
+  // SFTP
+  keyPath?: string
+  // S3
+  bucket?: string
+  region?: string
+  endpoint?: string       // custom endpoint (MinIO, Cloudflare R2, etc.)
+  accessKeyId?: string
+  secretAccessKey?: string  // masked in API responses
+  // SMB
+  share?: string
+  // SFTP / FTP / NFS / SMB path
+  remotePath?: string
+}
+
+export interface Endpoint {
+  id:        string
+  name:      string
+  type:      EndpointType
+  config:    SavedEndpointConfig
+  deviceId?: string   // required for type=local
+  createdAt: number
+  updatedAt: number
+}
+
+// ─────────────────────────────────────────────
 //  Core domain types
 // ─────────────────────────────────────────────
 
@@ -32,6 +70,8 @@ export interface Job {
   reliability?: JobReliability
   sourceDeviceId?: string
   destinationDeviceId?: string
+  sourceEndpointId?:      string   // ID of a saved Endpoint; resolved server-side at run time
+  destinationEndpointId?: string
   watch?:      boolean      // auto-trigger when local filesystem changes are observed
   schedule?:   string       // cron expression, e.g. "0 */6 * * *"
   status:      JobStatus

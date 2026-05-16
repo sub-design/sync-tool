@@ -1,9 +1,45 @@
 import { Router, type Router as ExpressRouter } from 'express'
 import { v4 as uuid } from 'uuid'
-import { jobsDb, logDb } from '../db'
+import { jobsDb, logDb, endpointsDb } from '../db'
 import { requireAuth } from '../middleware/requireAuth'
 import { auditRequest } from '../audit'
-import type { ServerToAgent } from '@sync-tool/shared'
+import { buildEndpointUri } from './endpoints'
+import type { Job, ServerToAgent } from '@sync-tool/shared'
+
+/** Resolve sourceEndpointId / destinationEndpointId → real URIs, server-side. */
+async function resolveEndpoints(
+  userId: string,
+  source: string,
+  destination: string,
+  sourceEndpointId?: string,
+  destinationEndpointId?: string,
+): Promise<{ source: string; destination: string }> {
+  let resolvedSource = source
+  let resolvedDest   = destination
+
+  if (sourceEndpointId) {
+    const ep = await endpointsDb.get(sourceEndpointId, userId)
+    if (!ep) throw Object.assign(new Error('Source endpoint not found'), { status: 400 })
+    resolvedSource = buildEndpointUri(ep)
+  }
+  if (destinationEndpointId) {
+    const ep = await endpointsDb.get(destinationEndpointId, userId)
+    if (!ep) throw Object.assign(new Error('Destination endpoint not found'), { status: 400 })
+    resolvedDest = buildEndpointUri(ep)
+  }
+
+  return { source: resolvedSource, destination: resolvedDest }
+}
+
+/** Return a job with endpoint URIs resolved fresh from the DB (used at run time). */
+async function withResolvedEndpoints(job: Job, userId: string): Promise<Job> {
+  if (!job.sourceEndpointId && !job.destinationEndpointId) return job
+  const { source, destination } = await resolveEndpoints(
+    userId, job.source, job.destination,
+    job.sourceEndpointId, job.destinationEndpointId,
+  )
+  return { ...job, source, destination }
+}
 
 export function createJobsRouter(
   broadcast:        (msg: ServerToAgent) => void,
@@ -28,18 +64,33 @@ export function createJobsRouter(
 
   router.post('/', async (req, res) => {
     const {
-      name, source, destination,
+      name, source = '', destination = '',
+      sourceEndpointId, destinationEndpointId,
       direction = 'ltr', transferMode = 'auto', deletionPolicy = 'backup', reliability = {},
       sourceDeviceId, destinationDeviceId, watch = false, schedule,
     } = req.body
-    if (!name || !source || !destination) {
-      res.status(400).json({ error: 'name, source, destination are required' }); return
+    if (!name) { res.status(400).json({ error: 'name is required' }); return }
+    if (!source && !sourceEndpointId) {
+      res.status(400).json({ error: 'source or sourceEndpointId is required' }); return
+    }
+    if (!destination && !destinationEndpointId) {
+      res.status(400).json({ error: 'destination or destinationEndpointId is required' }); return
+    }
+    let resolved: { source: string; destination: string }
+    try {
+      resolved = await resolveEndpoints(req.userId, source, destination, sourceEndpointId, destinationEndpointId)
+    } catch (err: unknown) {
+      res.status((err as { status?: number }).status ?? 400).json({ error: (err as Error).message }); return
     }
     const job = await jobsDb.create(
       {
-        id: uuid(), name, source, destination, direction, transferMode, deletionPolicy,
+        id: uuid(), name, source: resolved.source, destination: resolved.destination,
+        direction, transferMode, deletionPolicy,
         reliability: { encryptionEnabled: true, ...reliability },
-        sourceDeviceId, destinationDeviceId, watch: Boolean(watch), schedule,
+        sourceDeviceId, destinationDeviceId,
+        sourceEndpointId: sourceEndpointId ?? undefined,
+        destinationEndpointId: destinationEndpointId ?? undefined,
+        watch: Boolean(watch), schedule,
       },
       req.userId,
     )
@@ -47,7 +98,7 @@ export function createJobsRouter(
     auditRequest(req, 'job.created', {
       targetType: 'job',
       targetId:   job.id,
-      metadata:   { name: job.name, sourceDeviceId, destinationDeviceId, watch: Boolean(watch), schedule },
+      metadata:   { name: job.name, sourceDeviceId, destinationDeviceId, sourceEndpointId, destinationEndpointId, watch: Boolean(watch), schedule },
     })
     res.status(201).json(job)
   })
@@ -56,7 +107,26 @@ export function createJobsRouter(
     if ((await jobsDb.getUserId(req.params.id)) !== req.userId) {
       res.status(404).json({ error: 'Job not found' }); return
     }
-    const job = await jobsDb.update(req.params.id, req.body)
+    const patch = { ...req.body }
+    // Re-resolve endpoints if they changed
+    if (patch.sourceEndpointId !== undefined || patch.destinationEndpointId !== undefined || patch.source !== undefined || patch.destination !== undefined) {
+      const existing = await jobsDb.get(req.params.id)
+      if (!existing) { res.status(404).json({ error: 'Job not found' }); return }
+      try {
+        const resolved = await resolveEndpoints(
+          req.userId,
+          patch.source      ?? existing.source,
+          patch.destination ?? existing.destination,
+          patch.sourceEndpointId      !== undefined ? patch.sourceEndpointId      : existing.sourceEndpointId,
+          patch.destinationEndpointId !== undefined ? patch.destinationEndpointId : existing.destinationEndpointId,
+        )
+        patch.source      = resolved.source
+        patch.destination = resolved.destination
+      } catch (err: unknown) {
+        res.status((err as { status?: number }).status ?? 400).json({ error: (err as Error).message }); return
+      }
+    }
+    const job = await jobsDb.update(req.params.id, patch)
     if (!job) { res.status(404).json({ error: 'Job not found' }); return }
     onJobsChanged()
     auditRequest(req, 'job.updated', {
@@ -89,7 +159,10 @@ export function createJobsRouter(
     if (job.status === 'running' || job.status === 'queued') {
       res.status(409).json({ error: 'Job is already running or queued' }); return
     }
-    broadcast({ type: 'job:run', job })
+    // Re-resolve named endpoint configs at run time so changes to an endpoint
+    // propagate to all jobs that reference it without requiring a job edit.
+    const resolvedJob = await withResolvedEndpoints(job, req.userId)
+    broadcast({ type: 'job:run', job: resolvedJob })
     auditRequest(req, 'job.run_requested', {
       targetType: 'job',
       targetId:   job.id,

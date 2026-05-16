@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import { Server } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useWsStore } from '@/lib/ws'
 
@@ -33,6 +34,17 @@ export default function Shell({ children }: ShellProps) {
               }
             >
               Devices
+            </NavLink>
+            <NavLink
+              to="/endpoints"
+              className={({ isActive }) =>
+                isActive ? 'font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+              }
+            >
+              <span className="flex items-center gap-1">
+                <Server size={13} />
+                Endpoints
+              </span>
             </NavLink>
             <NavLink
               to="/audit"

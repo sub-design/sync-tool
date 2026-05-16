@@ -3,7 +3,8 @@ import { Controller, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Cron } from 'croner'
-import { ArrowLeftRight, ArrowRight, CheckIcon, ChevronRight, Loader2 } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { ArrowLeftRight, ArrowRight, CheckIcon, ChevronRight, Loader2, Server } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,9 +15,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import EndpointPicker from '@/components/EndpointPicker'
 import * as api from '@/lib/api'
 import { validateEndpoint } from '@/lib/backend'
+import { endpointsApi } from '@/lib/endpoints'
 import { describeCron } from '@/lib/cron'
 import type { Job } from '../types'
 
@@ -35,8 +38,10 @@ function generateJobName(): string {
 
 const schema = z.object({
   name:               z.string().min(1).max(60),
-  source:             z.string().min(1).refine(validateEndpoint, { message: 'Invalid path or connection URL' }),
-  destination:        z.string().min(1).refine(validateEndpoint, { message: 'Invalid path or connection URL' }),
+  source:             z.string(),
+  destination:        z.string(),
+  sourceEndpointId:      z.string().optional(),
+  destinationEndpointId: z.string().optional(),
   direction:          z.enum(['ltr', 'bidir', 'rtl']),
   transferMode:       z.enum(['auto', 'delta', 'full']),
   conflictStrategy:   z.enum(['newer-wins', 'skip', 'manual']),
@@ -78,6 +83,71 @@ const DELETION_POLICIES = [
   { value: 'mirror' as const, label: 'Mirror', description: 'Make destination exactly match source' },
 ]
 
+// ── Endpoint mode toggle ──────────────────────────────────────────────────────
+
+interface EndpointModeToggleProps {
+  label: string
+  saved: boolean
+  onToggle: (saved: boolean) => void
+  endpoints: import('../types').Endpoint[]
+  endpointId: string
+  onEndpointChange: (id: string) => void
+  manualPicker: React.ReactNode
+}
+
+function EndpointModeToggle({
+  label, saved, onToggle, endpoints, endpointId, onEndpointChange, manualPicker,
+}: EndpointModeToggleProps) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {/* Mode tabs */}
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        {endpoints.length > 0 && (
+          <div className="flex rounded-md border border-border overflow-hidden text-xs">
+            <button
+              type="button"
+              onClick={() => onToggle(false)}
+              className={`px-2 py-0.5 transition-colors ${!saved ? 'bg-secondary font-medium' : 'hover:bg-accent'}`}
+            >
+              Manual
+            </button>
+            <button
+              type="button"
+              onClick={() => onToggle(true)}
+              className={`px-2 py-0.5 border-l border-border transition-colors flex items-center gap-1 ${saved ? 'bg-secondary font-medium' : 'hover:bg-accent'}`}
+            >
+              <Server size={10} /> Saved
+            </button>
+          </div>
+        )}
+      </div>
+
+      {saved ? (
+        <Select value={endpointId} onValueChange={onEndpointChange}>
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder="Select saved endpoint…" />
+          </SelectTrigger>
+          <SelectContent>
+            {endpoints.map(ep => (
+              <SelectItem key={ep.id} value={ep.id}>
+                <span className="flex items-center gap-2">
+                  <span className="text-xs uppercase text-muted-foreground font-mono w-8">{ep.type}</span>
+                  {ep.name}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
+        manualPicker
+      )}
+    </div>
+  )
+}
+
+// ── Main form ─────────────────────────────────────────────────────────────────
+
 export interface JobFormProps {
   job?: Job
   onSuccess: (job: Job) => void
@@ -86,6 +156,13 @@ export interface JobFormProps {
 
 export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
   const [optionsOpen, setOptionsOpen] = useState(false)
+  const [srcSaved, setSrcSaved]  = useState(Boolean(job?.sourceEndpointId))
+  const [dstSaved, setDstSaved]  = useState(Boolean(job?.destinationEndpointId))
+
+  const { data: endpoints = [] } = useQuery({
+    queryKey: ['endpoints'],
+    queryFn:  endpointsApi.list,
+  })
 
   const {
     register,
@@ -113,8 +190,10 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
       resumeEnabled:      job?.reliability?.resumeEnabled ?? true,
       notifyEmail:        job?.reliability?.notifyEmail ?? '',
       notifyWebhookUrl:   job?.reliability?.notifyWebhookUrl ?? '',
-      sourceDeviceId:     job?.sourceDeviceId ?? '',
-      destinationDeviceId: job?.destinationDeviceId ?? '',
+      sourceDeviceId:        job?.sourceDeviceId ?? '',
+      destinationDeviceId:   job?.destinationDeviceId ?? '',
+      sourceEndpointId:      job?.sourceEndpointId ?? '',
+      destinationEndpointId: job?.destinationEndpointId ?? '',
       watch:    job?.watch    ?? false,
       schedule: job?.schedule ?? '',
     },
@@ -138,11 +217,26 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
   })()
 
   const onSubmit = async (values: FormValues) => {
+    // Validate: each side needs either a saved endpoint or a valid manual URI
+    if (!srcSaved && !validateEndpoint(values.source)) {
+      setError('source', { message: 'Invalid path or connection URL' }); return
+    }
+    if (!dstSaved && !validateEndpoint(values.destination)) {
+      setError('destination', { message: 'Invalid path or connection URL' }); return
+    }
+    if (srcSaved && !values.sourceEndpointId) {
+      setError('source', { message: 'Select a saved endpoint' }); return
+    }
+    if (dstSaved && !values.destinationEndpointId) {
+      setError('destination', { message: 'Select a saved endpoint' }); return
+    }
     try {
       const payload = {
         name:             values.name,
-        source:           values.source,
-        destination:      values.destination,
+        source:           srcSaved ? '' : values.source,
+        destination:      dstSaved ? '' : values.destination,
+        sourceEndpointId:      srcSaved ? (values.sourceEndpointId || undefined) : undefined,
+        destinationEndpointId: dstSaved ? (values.destinationEndpointId || undefined) : undefined,
         direction:        values.direction,
         transferMode:     values.transferMode,
         conflictStrategy: values.conflictStrategy,
@@ -157,8 +251,8 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
           notifyEmail:        values.notifyEmail || undefined,
           notifyWebhookUrl:   values.notifyWebhookUrl || undefined,
         },
-        sourceDeviceId:      values.sourceDeviceId || undefined,
-        destinationDeviceId: values.destinationDeviceId || undefined,
+        sourceDeviceId:      srcSaved ? undefined : (values.sourceDeviceId || undefined),
+        destinationDeviceId: dstSaved ? undefined : (values.destinationDeviceId || undefined),
         watch:    values.watch,
         schedule: values.schedule || undefined,
       }
@@ -178,18 +272,28 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
       <div className="flex items-start gap-3">
         {/* Source / Left */}
         <div className="flex-1 min-w-0">
-          <Controller
-            control={control}
-            name="source"
-            render={({ field }) => (
-              <EndpointPicker
-                label={isSync ? 'Left Folder' : 'Source Folder'}
-                value={field.value}
-                onChange={field.onChange}
-                deviceId={watch('sourceDeviceId') || undefined}
-                onDeviceChange={id => setValue('sourceDeviceId', id ?? '', { shouldValidate: true })}
+          <EndpointModeToggle
+            label={isSync ? 'Left Folder' : 'Source Folder'}
+            saved={srcSaved}
+            onToggle={v => { setSrcSaved(v); if (v) setValue('source', ''); else setValue('sourceEndpointId', '') }}
+            endpoints={endpoints}
+            endpointId={watch('sourceEndpointId') ?? ''}
+            onEndpointChange={id => setValue('sourceEndpointId', id, { shouldValidate: true })}
+            manualPicker={
+              <Controller
+                control={control}
+                name="source"
+                render={({ field }) => (
+                  <EndpointPicker
+                    label={isSync ? 'Left Folder' : 'Source Folder'}
+                    value={field.value}
+                    onChange={field.onChange}
+                    deviceId={watch('sourceDeviceId') || undefined}
+                    onDeviceChange={id => setValue('sourceDeviceId', id ?? '', { shouldValidate: true })}
+                  />
+                )}
               />
-            )}
+            }
           />
           {errors.source && <p className="text-xs text-destructive mt-1">{errors.source.message}</p>}
         </div>
@@ -252,18 +356,28 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
 
         {/* Destination / Right */}
         <div className="flex-1 min-w-0">
-          <Controller
-            control={control}
-            name="destination"
-            render={({ field }) => (
-              <EndpointPicker
-                label={isSync ? 'Right Folder' : 'Destination Folder'}
-                value={field.value}
-                onChange={field.onChange}
-                deviceId={watch('destinationDeviceId') || undefined}
-                onDeviceChange={id => setValue('destinationDeviceId', id ?? '', { shouldValidate: true })}
+          <EndpointModeToggle
+            label={isSync ? 'Right Folder' : 'Destination Folder'}
+            saved={dstSaved}
+            onToggle={v => { setDstSaved(v); if (v) setValue('destination', ''); else setValue('destinationEndpointId', '') }}
+            endpoints={endpoints}
+            endpointId={watch('destinationEndpointId') ?? ''}
+            onEndpointChange={id => setValue('destinationEndpointId', id, { shouldValidate: true })}
+            manualPicker={
+              <Controller
+                control={control}
+                name="destination"
+                render={({ field }) => (
+                  <EndpointPicker
+                    label={isSync ? 'Right Folder' : 'Destination Folder'}
+                    value={field.value}
+                    onChange={field.onChange}
+                    deviceId={watch('destinationDeviceId') || undefined}
+                    onDeviceChange={id => setValue('destinationDeviceId', id ?? '', { shouldValidate: true })}
+                  />
+                )}
               />
-            )}
+            }
           />
           {errors.destination && <p className="text-xs text-destructive mt-1">{errors.destination.message}</p>}
         </div>

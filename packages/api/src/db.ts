@@ -1,5 +1,6 @@
 import postgres from 'postgres'
-import type { Job, SyncResult, RollbackManifest, RollbackResult } from '@sync-tool/shared'
+import { v4 as uuid } from 'uuid'
+import type { Job, Endpoint, SavedEndpointConfig, SyncResult, RollbackManifest, RollbackResult } from '@sync-tool/shared'
 
 // ── Connection ────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,19 @@ export async function initDb(): Promise<void> {
   `
 
   await sql`
+    CREATE TABLE IF NOT EXISTS endpoints (
+      id         TEXT   PRIMARY KEY,
+      user_id    TEXT   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name       TEXT   NOT NULL,
+      type       TEXT   NOT NULL,
+      config     TEXT   NOT NULL DEFAULT '{}',
+      device_id  TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    )
+  `
+
+  await sql`
     CREATE TABLE IF NOT EXISTS sync_log (
       id                BIGSERIAL PRIMARY KEY,
       job_id            TEXT   NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -121,6 +135,8 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS revoked_at BIGINT`,
     `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS rotated_from TEXT`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS transport_mode TEXT`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS source_endpoint_id TEXT REFERENCES endpoints(id) ON DELETE SET NULL`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS destination_endpoint_id TEXT REFERENCES endpoints(id) ON DELETE SET NULL`,
   ]) {
     await sql.unsafe(stmt)
   }
@@ -141,9 +157,11 @@ function rowToJob(row: Record<string, unknown>): Job {
     transferMode:        ((row.transfer_mode as string) ?? 'auto') as Job['transferMode'],
     deletionPolicy:      ((row.deletion_policy as string) ?? 'backup') as Job['deletionPolicy'],
     reliability:         parseJson(row.reliability as string),
-    sourceDeviceId:      (row.source_device_id as string) ?? undefined,
-    destinationDeviceId: (row.destination_device_id as string) ?? undefined,
-    watch:               Boolean(row.watch),
+    sourceDeviceId:        (row.source_device_id as string) ?? undefined,
+    destinationDeviceId:   (row.destination_device_id as string) ?? undefined,
+    sourceEndpointId:      (row.source_endpoint_id as string) ?? undefined,
+    destinationEndpointId: (row.destination_endpoint_id as string) ?? undefined,
+    watch:                 Boolean(row.watch),
     schedule:            (row.schedule as string) ?? undefined,
     status:              row.status as Job['status'],
     lastRun:             row.last_run != null ? Number(row.last_run) : undefined,
@@ -337,18 +355,20 @@ export const jobsDb = {
     await sql`
       INSERT INTO jobs
         (id, user_id, name, source, destination, direction, transfer_mode, deletion_policy, reliability,
-         source_device_id, destination_device_id, watch, schedule, status, created_at, updated_at)
+         source_device_id, destination_device_id, source_endpoint_id, destination_endpoint_id,
+         watch, schedule, status, created_at, updated_at)
       VALUES
         (${full.id}, ${userId}, ${full.name}, ${full.source}, ${full.destination},
          ${full.direction}, ${full.transferMode ?? 'auto'}, ${full.deletionPolicy ?? 'backup'}, ${JSON.stringify(full.reliability ?? {})},
          ${full.sourceDeviceId ?? null}, ${full.destinationDeviceId ?? null},
+         ${full.sourceEndpointId ?? null}, ${full.destinationEndpointId ?? null},
          ${full.watch ?? false}, ${full.schedule ?? null},
          ${full.status}, ${full.createdAt}, ${full.updatedAt})
     `
     return full
   },
 
-  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'transferMode' | 'deletionPolicy' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'watch' | 'schedule'>>): Promise<Job | undefined> {
+  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'transferMode' | 'deletionPolicy' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'sourceEndpointId' | 'destinationEndpointId' | 'watch' | 'schedule'>>): Promise<Job | undefined> {
     const existing = await jobsDb.get(id)
     if (!existing) return undefined
     const updated: Job = { ...existing, ...patch, updatedAt: Date.now() }
@@ -363,6 +383,8 @@ export const jobsDb = {
         reliability = ${JSON.stringify(updated.reliability ?? {})},
         source_device_id = ${updated.sourceDeviceId ?? null},
         destination_device_id = ${updated.destinationDeviceId ?? null},
+        source_endpoint_id = ${updated.sourceEndpointId ?? null},
+        destination_endpoint_id = ${updated.destinationEndpointId ?? null},
         watch = ${updated.watch ?? false},
         schedule = ${updated.schedule ?? null},
         updated_at = ${updated.updatedAt}
@@ -387,6 +409,76 @@ export const jobsDb = {
         updated_at = ${now}
       WHERE id = ${id}
     `
+  },
+}
+
+// ── Endpoints ────────────────────────────────────────────────────────────────
+
+function rowToEndpoint(row: Record<string, unknown>): Endpoint {
+  return {
+    id:        row.id as string,
+    name:      row.name as string,
+    type:      row.type as Endpoint['type'],
+    config:    parseEndpointConfig(row.config),
+    deviceId:  (row.device_id as string) ?? undefined,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  }
+}
+
+function parseEndpointConfig(value: unknown): SavedEndpointConfig {
+  if (!value || typeof value !== 'string') return {}
+  try { const p = JSON.parse(value); return p && typeof p === 'object' ? p : {} } catch { return {} }
+}
+
+export const endpointsDb = {
+  async list(userId: string): Promise<Endpoint[]> {
+    const rows = await sql`SELECT * FROM endpoints WHERE user_id = ${userId} ORDER BY created_at DESC`
+    return rows.map(rowToEndpoint)
+  },
+
+  async get(id: string, userId: string): Promise<Endpoint | undefined> {
+    const [row] = await sql`SELECT * FROM endpoints WHERE id = ${id} AND user_id = ${userId}`
+    return row ? rowToEndpoint(row) : undefined
+  },
+
+  async create(userId: string, ep: Omit<Endpoint, 'createdAt' | 'updatedAt'>): Promise<Endpoint> {
+    const now = Date.now()
+    await sql`
+      INSERT INTO endpoints (id, user_id, name, type, config, device_id, created_at, updated_at)
+      VALUES (${ep.id}, ${userId}, ${ep.name}, ${ep.type}, ${JSON.stringify(ep.config)}, ${ep.deviceId ?? null}, ${now}, ${now})
+    `
+    return { ...ep, createdAt: now, updatedAt: now }
+  },
+
+  async update(id: string, userId: string, patch: Partial<Pick<Endpoint, 'name' | 'type' | 'config' | 'deviceId'>>): Promise<Endpoint | undefined> {
+    const existing = await endpointsDb.get(id, userId)
+    if (!existing) return undefined
+    const updated: Endpoint = { ...existing, ...patch, updatedAt: Date.now() }
+    await sql`
+      UPDATE endpoints SET
+        name      = ${updated.name},
+        type      = ${updated.type},
+        config    = ${JSON.stringify(updated.config)},
+        device_id = ${updated.deviceId ?? null},
+        updated_at = ${updated.updatedAt}
+      WHERE id = ${id} AND user_id = ${userId}
+    `
+    return updated
+  },
+
+  async delete(id: string, userId: string): Promise<boolean> {
+    const result = await sql`DELETE FROM endpoints WHERE id = ${id} AND user_id = ${userId}`
+    return result.count > 0
+  },
+
+  /** Returns jobs that reference this endpoint (for 409 on delete). */
+  async findJobsUsing(endpointId: string): Promise<Array<{ id: string; name: string }>> {
+    const rows = await sql`
+      SELECT id, name FROM jobs
+      WHERE source_endpoint_id = ${endpointId} OR destination_endpoint_id = ${endpointId}
+    `
+    return rows.map(r => ({ id: r.id as string, name: r.name as string }))
   },
 }
 

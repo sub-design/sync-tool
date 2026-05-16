@@ -8,6 +8,7 @@ import { createJobsRouter } from './routes/jobs'
 import { createAuthRouter } from './routes/auth'
 import { createDevicesRouter } from './routes/devices'
 import { createAuditRouter } from './routes/audit'
+import { createEndpointsRouter } from './routes/endpoints'
 import { authFromWsRequest, requireAuth } from './middleware/requireAuth'
 import { hitRateLimit } from './rateLimit'
 import { auditRequest, auditSystem } from './audit'
@@ -387,9 +388,10 @@ async function checkScheduledJobs(): Promise<void> {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-app.use('/api/auth',    createAuthRouter())
-app.use('/api/devices', createDevicesRouter())
-app.use('/api/audit',   createAuditRouter())
+app.use('/api/auth',      createAuthRouter())
+app.use('/api/devices',   createDevicesRouter())
+app.use('/api/audit',     createAuditRouter())
+app.use('/api/endpoints', createEndpointsRouter())
 app.use('/api/jobs',    createJobsRouter(
   async (msg) => {
     if (msg.type === 'job:run')    await queueJob(msg.job, 'manual')

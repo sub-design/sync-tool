@@ -11,7 +11,33 @@ export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'ca
 export type TransferMode     = 'full' | 'delta' | 'auto'
 export type ConflictStrategy = 'newer-wins' | 'skip' | 'manual'
 export type DeletionPolicy   = 'backup' | 'backup-with-deletes' | 'mirror'
-export type BackendType  = 'local' | 'sftp' | 'ftp' | 'ftps' | 'smb' | 'nfs'
+export type BackendType  = 'local' | 'sftp' | 'ftp' | 'ftps' | 's3' | 'smb' | 'nfs'
+
+export interface SavedEndpointConfig {
+  path?: string
+  host?: string
+  port?: number
+  username?: string
+  password?: string
+  keyPath?: string
+  bucket?: string
+  region?: string
+  endpoint?: string
+  accessKeyId?: string
+  secretAccessKey?: string
+  share?: string
+  remotePath?: string
+}
+
+export interface Endpoint {
+  id:        string
+  name:      string
+  type:      BackendType
+  config:    SavedEndpointConfig
+  deviceId?: string
+  createdAt: number
+  updatedAt: number
+}
 
 export interface EndpointConfig {
   type:       BackendType
@@ -52,6 +78,7 @@ export interface Job {
   deletionPolicy?: DeletionPolicy
   reliability?: JobReliability
   sourceDeviceId?: string; destinationDeviceId?: string
+  sourceEndpointId?: string; destinationEndpointId?: string
   watch?: boolean
   schedule?: string; status: JobStatus
   lastRun?: number; lastError?: string; createdAt: number; updatedAt: number

@@ -21,9 +21,15 @@ export class S3Backend implements StorageBackend {
     const region   = url.searchParams.get('region')   ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-1'
     const endpoint = url.searchParams.get('endpoint') ?? process.env.S3_ENDPOINT
 
+    // Credentials can be embedded as username:password in the URI
+    // (set by the API when resolving a Named Endpoint at run time)
+    const accessKeyId     = url.username ? decodeURIComponent(url.username) : undefined
+    const secretAccessKey = url.password ? decodeURIComponent(url.password) : undefined
+
     this.client = new S3Client({
       region,
       ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
+      ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {}),
     })
   }
 
