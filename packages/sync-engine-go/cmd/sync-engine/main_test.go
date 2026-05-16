@@ -18,6 +18,55 @@ func TestSignatureDeltaApplyRoundTrip(t *testing.T) {
 	roundTripDelta(t, basisData, sourceData, 128)
 }
 
+func TestLargeFileRoundTripUsesCacheHintsWithoutChangingOutput(t *testing.T) {
+	dir := t.TempDir()
+	basis := filepath.Join(dir, "basis.bin")
+	source := filepath.Join(dir, "source.bin")
+	sigPath := filepath.Join(dir, "basis.sig.json")
+	deltaPath := filepath.Join(dir, "source.delta.jsonl")
+	out := filepath.Join(dir, "out.bin")
+	size := int64(largeFileNoCacheThreshold + 1)
+
+	if err := createSparseFile(basis, size, map[int64][]byte{
+		0:         []byte("basis-start"),
+		size - 16: []byte("basis-end-marker"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := createSparseFile(source, size, map[int64][]byte{
+		0:         []byte("source-start"),
+		size / 2:  []byte("middle-change"),
+		size - 16: []byte("source-end-markr"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sig, err := BuildSignature(basis, 1024*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(sigPath, sig); err != nil {
+		t.Fatal(err)
+	}
+	if err := BuildDelta(source, sig, deltaPath); err != nil {
+		t.Fatal(err)
+	}
+	expectedSHA256, err := fileSHA256(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyDelta(basis, deltaPath, out, expectedSHA256); err != nil {
+		t.Fatal(err)
+	}
+	actualSHA256, err := fileSHA256(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actualSHA256 != expectedSHA256 {
+		t.Fatalf("large round trip hash mismatch: got %s, expected %s", actualSHA256, expectedSHA256)
+	}
+}
+
 func TestSignatureDeltaApplyEdgeCases(t *testing.T) {
 	blockSize := 16
 	cases := []struct {
@@ -72,6 +121,23 @@ func TestSignatureDeltaApplyEdgeCases(t *testing.T) {
 			roundTripDelta(t, tc.basis, tc.source, blockSize)
 		})
 	}
+}
+
+func createSparseFile(path string, size int64, writes map[int64][]byte) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := file.Truncate(size); err != nil {
+		return err
+	}
+	for offset, data := range writes {
+		if _, err := file.WriteAt(data, offset); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func TestRollingChecksumMatchesRolledWindows(t *testing.T) {

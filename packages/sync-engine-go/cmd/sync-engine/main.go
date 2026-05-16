@@ -15,16 +15,17 @@ import (
 )
 
 const (
-	engineVersion    = "delta-v1"
-	defaultBlockSize = 64 * 1024
-	maxDataRun       = 1024 * 1024
+	engineVersion             = "delta-v1"
+	defaultBlockSize          = 64 * 1024
+	maxDataRun                = 1024 * 1024
+	largeFileNoCacheThreshold = 50 * 1024 * 1024
 )
 
 type Signature struct {
-	Version   string `json:"version"`
-	BlockSize int    `json:"blockSize"`
-	FileSize  int64  `json:"fileSize"`
-	SHA256    string `json:"sha256"`
+	Version   string           `json:"version"`
+	BlockSize int              `json:"blockSize"`
+	FileSize  int64            `json:"fileSize"`
+	SHA256    string           `json:"sha256"`
 	Blocks    []BlockSignature `json:"blocks"`
 }
 
@@ -37,11 +38,11 @@ type BlockSignature struct {
 }
 
 type DeltaOp struct {
-	Type  string `json:"type"`
-	Index int    `json:"index,omitempty"`
-	Offset int64 `json:"offset,omitempty"`
-	Size  int    `json:"size,omitempty"`
-	Data  string `json:"data,omitempty"`
+	Type   string `json:"type"`
+	Index  int    `json:"index,omitempty"`
+	Offset int64  `json:"offset,omitempty"`
+	Size   int    `json:"size,omitempty"`
+	Data   string `json:"data,omitempty"`
 }
 
 func main() {
@@ -127,11 +128,11 @@ func runApply(args []string) error {
 }
 
 func BuildSignature(filePath string, blockSize int) (Signature, error) {
-	file, err := os.Open(filePath)
+	file, err := openInputFile(filePath)
 	if err != nil {
 		return Signature{}, err
 	}
-	defer file.Close()
+	defer closeInputFile(file)
 
 	stat, err := file.Stat()
 	if err != nil {
@@ -189,11 +190,11 @@ func BuildDelta(sourcePath string, sig Signature, outPath string) error {
 		return errors.New("signature blockSize must be positive")
 	}
 
-	sourceFile, err := os.Open(sourcePath)
+	sourceFile, err := openInputFile(sourcePath)
 	if err != nil {
 		return err
 	}
-	defer sourceFile.Close()
+	defer closeInputFile(sourceFile)
 	source := bufio.NewReaderSize(sourceFile, sig.BlockSize*2)
 
 	out, err := createFile(outPath)
@@ -281,11 +282,11 @@ func BuildDelta(sourcePath string, sig Signature, outPath string) error {
 }
 
 func ApplyDelta(basisPath string, deltaPath string, outPath string, expectSHA256 string) error {
-	basis, err := os.Open(basisPath)
+	basis, err := openInputFile(basisPath)
 	if err != nil {
 		return err
 	}
-	defer basis.Close()
+	defer closeInputFile(basis)
 
 	delta, err := os.Open(deltaPath)
 	if err != nil {
@@ -405,7 +406,7 @@ func RollChecksum(weak uint32, oldByte byte, newByte byte, windowSize int) uint3
 	a := weak & 0xffff
 	b := weak >> 16
 	a = (a - uint32(oldByte) + uint32(newByte)) & 0xffff
-	b = (b - (uint32(windowSize)*uint32(oldByte)) + a) & 0xffff
+	b = (b - (uint32(windowSize) * uint32(oldByte)) + a) & 0xffff
 	return (b << 16) | a
 }
 
@@ -415,11 +416,11 @@ func strongHash(block []byte) string {
 }
 
 func fileSHA256(path string) (string, error) {
-	file, err := os.Open(path)
+	file, err := openInputFile(path)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer closeInputFile(file)
 
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
@@ -446,6 +447,29 @@ func readJSONFile(path string, value any) error {
 	}
 	defer file.Close()
 	return json.NewDecoder(file).Decode(value)
+}
+
+func openInputFile(path string) (*os.File, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if shouldAvoidCache(file) {
+		adviseInputFileStart(file)
+	}
+	return file, nil
+}
+
+func closeInputFile(file *os.File) error {
+	if shouldAvoidCache(file) {
+		adviseInputFileDone(file)
+	}
+	return file.Close()
+}
+
+func shouldAvoidCache(file *os.File) bool {
+	stat, err := file.Stat()
+	return err == nil && stat.Size() >= largeFileNoCacheThreshold
 }
 
 func createFile(path string) (*os.File, error) {

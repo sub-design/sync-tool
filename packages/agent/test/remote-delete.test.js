@@ -12,6 +12,7 @@ const path   = require('node:path')
 const test   = require('node:test')
 
 process.env.SYNC_ALLOWED_ROOTS = os.tmpdir()
+process.env.STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-delete-state-'))
 
 const { runRemoteDeltaSync } = require('../dist/delta/remote.js')
 const { stateDb }            = require('../dist/state.js')
@@ -23,7 +24,7 @@ function makeRelay(manifestEntries, deleted) {
     onRequest:  () => {},
     onEvent:    () => {},
     request: async (deviceId, method, body) => {
-      if (method === 'delta:manifest') return manifestEntries
+      if (method === 'delta:manifest') return { entries: manifestEntries, total: manifestEntries.length }
       if (method === 'delta:delete')   { deleted.push(body.relativePath); return { ok: true } }
       if (method === 'delta:transfer-start') return { transferId: 'stub-' + Date.now() }
       if (method === 'delta:transfer-finish') return { ok: true }
@@ -31,6 +32,7 @@ function makeRelay(manifestEntries, deleted) {
       throw new Error(`Unexpected relay method in test: ${method}`)
     },
     event: async () => {},
+    getTransportMode: () => 'relay',
   }
 }
 
@@ -65,9 +67,10 @@ test('backup policy never deletes destination files', async () => {
   const relay   = makeRelay([makeManifestEntry('orphan.txt')], deleted)
   const state   = stateDb
 
-  await runRemoteDeltaSync(job, relay, state)
+  const result = await runRemoteDeltaSync(job, relay, state)
 
   assert.deepEqual(deleted, [], 'backup policy must not delete anything')
+  assert.equal(result.transportMode, 'relay')
   fs.rmSync(tmpDir, { recursive: true })
 })
 

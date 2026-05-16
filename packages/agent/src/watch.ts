@@ -5,15 +5,19 @@ import type { Job } from '@sync-tool/shared'
 type TriggerJob = (jobId: string, changedPath?: string) => void
 
 const DEFAULT_WATCH_DEBOUNCE_MS = 1_500
+const DEFAULT_WATCH_STORM_EVENT_THRESHOLD = 1_000
 
 export class JobWatcher {
   private readonly watchers = new Map<string, FSWatcher>()
   private readonly timers = new Map<string, NodeJS.Timeout>()
+  private readonly eventCounts = new Map<string, number>()
+  private readonly lastChangedPaths = new Map<string, string | undefined>()
 
   constructor(
     private readonly deviceId: string,
     private readonly triggerJob: TriggerJob,
     private readonly debounceMs = Math.max(100, parseInt(process.env.WATCH_DEBOUNCE_MS ?? String(DEFAULT_WATCH_DEBOUNCE_MS), 10)),
+    private readonly stormEventThreshold = parsePositiveInt(process.env.WATCH_STORM_EVENT_THRESHOLD, DEFAULT_WATCH_STORM_EVENT_THRESHOLD),
   ) {}
 
   sync(jobs: Job[]): void {
@@ -28,6 +32,8 @@ export class JobWatcher {
       void watcher.close()
       this.watchers.delete(jobId)
       this.clearTimer(jobId)
+      this.eventCounts.delete(jobId)
+      this.lastChangedPaths.delete(jobId)
     }
 
     for (const { job, paths } of wanted.values()) {
@@ -39,7 +45,11 @@ export class JobWatcher {
   close(): void {
     for (const watcher of this.watchers.values()) void watcher.close()
     this.watchers.clear()
-    for (const jobId of this.timers.keys()) this.clearTimer(jobId)
+    for (const jobId of this.timers.keys()) {
+      this.clearTimer(jobId)
+      this.eventCounts.delete(jobId)
+      this.lastChangedPaths.delete(jobId)
+    }
   }
 
   private createWatcher(job: Job, paths: string[]): FSWatcher {
@@ -64,10 +74,22 @@ export class JobWatcher {
   }
 
   private scheduleTrigger(jobId: string, changedPath?: string): void {
+    const count = (this.eventCounts.get(jobId) ?? 0) + 1
+    this.eventCounts.set(jobId, count)
+    this.lastChangedPaths.set(jobId, changedPath)
     this.clearTimer(jobId)
     const timer = setTimeout(() => {
       this.timers.delete(jobId)
-      this.triggerJob(jobId, changedPath)
+      const eventCount = this.eventCounts.get(jobId) ?? 0
+      const pathToReport = eventCount > this.stormEventThreshold
+        ? undefined
+        : this.lastChangedPaths.get(jobId)
+      this.eventCounts.delete(jobId)
+      this.lastChangedPaths.delete(jobId)
+      if (eventCount > this.stormEventThreshold) {
+        console.warn(`[watch] Job ${jobId} received ${eventCount} filesystem events; running full scan`)
+      }
+      this.triggerJob(jobId, pathToReport)
     }, this.debounceMs)
     timer.unref()
     this.timers.set(jobId, timer)
@@ -78,6 +100,12 @@ export class JobWatcher {
     if (timer) clearTimeout(timer)
     this.timers.delete(jobId)
   }
+}
+
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
 export function watchPathsForJob(job: Job, deviceId: string): string[] {

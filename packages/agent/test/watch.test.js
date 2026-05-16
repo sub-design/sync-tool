@@ -2,7 +2,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const test = require('node:test')
 
-const { shouldIgnoreWatchPath, watchPathsForJob } = require('../dist/watch.js')
+const { JobWatcher, shouldIgnoreWatchPath, watchPathsForJob } = require('../dist/watch.js')
 
 test('watchPathsForJob watches local paths for untargeted jobs', () => {
   const job = baseJob({
@@ -42,6 +42,40 @@ test('shouldIgnoreWatchPath ignores sync metadata and partial files', () => {
   assert.equal(shouldIgnoreWatchPath('/tmp/root/file.txt'), false)
 })
 
+test('JobWatcher reports changedPath for a normal debounce window', async () => {
+  const calls = []
+  const watcher = new JobWatcher('device-a', (jobId, changedPath) => {
+    calls.push({ jobId, changedPath })
+  }, 10, 10)
+
+  watcher.scheduleTrigger('job-a', '/tmp/source/file.txt')
+  await delay(30)
+
+  assert.deepEqual(calls, [{ jobId: 'job-a', changedPath: '/tmp/source/file.txt' }])
+})
+
+test('JobWatcher coalesces event storms into one full scan trigger', async () => {
+  const calls = []
+  const warnings = []
+  const originalWarn = console.warn
+  console.warn = (message) => warnings.push(String(message))
+  try {
+    const watcher = new JobWatcher('device-a', (jobId, changedPath) => {
+      calls.push({ jobId, changedPath })
+    }, 10, 2)
+
+    watcher.scheduleTrigger('job-a', '/tmp/source/a.txt')
+    watcher.scheduleTrigger('job-a', '/tmp/source/b.txt')
+    watcher.scheduleTrigger('job-a', '/tmp/source/c.txt')
+    await delay(30)
+  } finally {
+    console.warn = originalWarn
+  }
+
+  assert.deepEqual(calls, [{ jobId: 'job-a', changedPath: undefined }])
+  assert.ok(warnings.some((message) => message.includes('received 3 filesystem events')))
+})
+
 function baseJob(overrides) {
   const now = Date.now()
   return {
@@ -55,4 +89,8 @@ function baseJob(overrides) {
     updatedAt: now,
     ...overrides,
   }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
