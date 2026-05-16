@@ -80,6 +80,7 @@ export const BACKEND_DEFAULTS: Record<BackendType, Partial<EndpointConfig>> = {
   sftp:  { port: '22' },
   ftp:   { port: '21' },
   ftps:  { port: '990' },
+  s3:    {},
   smb:   { port: '' },
   nfs:   { port: '' },
 }

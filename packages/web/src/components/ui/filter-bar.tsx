@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { SlidersHorizontal, X, ChevronDown } from "lucide-react";
+import { SlidersHorizontal, X } from "lucide-react";
 import { cn } from "./utils";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover";
 import { Checkbox } from "./checkbox";

@@ -335,7 +335,10 @@ export default function JobDetail() {
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction variant="destructive" onClick={handleDelete}>
+                  <AlertDialogAction
+                    className="bg-destructive text-white hover:bg-destructive/90"
+                    onClick={handleDelete}
+                  >
                     Delete
                   </AlertDialogAction>
                 </AlertDialogFooter>

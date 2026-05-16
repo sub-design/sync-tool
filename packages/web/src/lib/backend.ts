@@ -5,6 +5,7 @@ const defaultPorts: Record<BackendType, string> = {
   sftp: '22',
   ftp: '21',
   ftps: '990',
+  s3: '',
   smb: '',
   nfs: '',
 }
