@@ -279,7 +279,7 @@ export default function JobDetail() {
 
             {/* Edit dialog */}
             <Dialog open={editOpen} onOpenChange={setEditOpen}>
-              <DialogContent>
+              <DialogContent className="sm:max-w-5xl">
                 <DialogTitle>Edit job</DialogTitle>
                 <JobForm
                   job={job}

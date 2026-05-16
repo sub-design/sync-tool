@@ -257,7 +257,7 @@ export async function runSync(
   await fs.promises.mkdir(rollback.baseDir, { recursive: true })
 
   const lockDir = isLocalPath(srcPath) ? srcPath : null
-  if (lockDir) await acquireLock(lockDir, job.id)
+  if (lockDir) await acquireLockForJob(lockDir, job, signal ?? new AbortController().signal)
 
   try {
     await srcBackend.mkdirp(srcPath)
@@ -289,6 +289,26 @@ export async function runSync(
   void pruneRollbackData(job.id)
 
   return result
+}
+
+async function acquireLockForJob(lockDir: string, job: Job, signal: AbortSignal): Promise<void> {
+  const waitMs = Math.max(0, job.autoOptions?.waitForLocksMinutes ?? 0) * 60_000
+  const deadline = Date.now() + waitMs
+  let lastError: unknown
+
+  do {
+    if (signal.aborted) throw new Error('Job cancelled')
+    try {
+      await acquireLock(lockDir, job.id)
+      return
+    } catch (err) {
+      lastError = err
+      if (Date.now() >= deadline) break
+      await sleep(Math.min(2_000, Math.max(100, deadline - Date.now())), signal)
+    }
+  } while (Date.now() < deadline)
+
+  throw lastError instanceof Error ? lastError : new Error('Directory is locked')
 }
 
 // ── One-way sync ──────────────────────────────────────────────────────────────

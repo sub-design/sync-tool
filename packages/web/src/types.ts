@@ -97,6 +97,18 @@ export interface JobReliability {
   resumeEnabled?: boolean
 }
 
+export interface JobAutoOptions {
+  fileChangeDelaySec?: number
+  onFolderConnect?: boolean
+  onStart?: boolean
+  periodicEveryMinutes?: number
+  onLogoff?: boolean
+  unattended?: boolean
+  skipIfChangedPercent?: number
+  waitForLocksMinutes?: number
+  autoClearTreeAfterSync?: boolean
+}
+
 export interface Job {
   id: string; name: string; source: string; destination: string
   direction: JobDirection; transferMode?: TransferMode
@@ -106,7 +118,9 @@ export interface Job {
   sourceDeviceId?: string; destinationDeviceId?: string
   sourceEndpointId?: string; destinationEndpointId?: string
   watch?: boolean
-  schedule?: string; status: JobStatus
+  schedule?: string
+  autoOptions?: JobAutoOptions
+  status: JobStatus
   lastRun?: number; lastError?: string; createdAt: number; updatedAt: number
 }
 

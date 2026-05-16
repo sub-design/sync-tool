@@ -83,6 +83,18 @@ export interface JobReliability {
   resumeEnabled?:     boolean
 }
 
+export interface JobAutoOptions {
+  fileChangeDelaySec?:      number
+  onFolderConnect?:         boolean
+  onStart?:                 boolean
+  periodicEveryMinutes?:    number
+  onLogoff?:                boolean
+  unattended?:              boolean
+  skipIfChangedPercent?:    number
+  waitForLocksMinutes?:     number
+  autoClearTreeAfterSync?:  boolean
+}
+
 export interface Job {
   id:          string
   orgId?:      string   // set by API server; agents can ignore
@@ -100,6 +112,7 @@ export interface Job {
   destinationEndpointId?: string
   watch?:      boolean      // auto-trigger when local filesystem changes are observed
   schedule?:   string       // cron expression, e.g. "0 */6 * * *"
+  autoOptions?: JobAutoOptions
   status:      JobStatus
   lastRun?:    number       // unix ms
   lastError?:  string

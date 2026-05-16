@@ -65,6 +65,7 @@ export async function initDb(): Promise<void> {
       destination_device_id TEXT,
       watch                 BOOLEAN NOT NULL DEFAULT false,
       schedule              TEXT,
+      auto_options          TEXT   DEFAULT '{}',
       status                TEXT   NOT NULL DEFAULT 'idle',
       last_run              BIGINT,
       last_error            TEXT,
@@ -139,6 +140,7 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS source_device_id TEXT`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS destination_device_id TEXT`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS watch BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS auto_options TEXT DEFAULT '{}'`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS logical_bytes BIGINT DEFAULT 0`,
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS files_deleted INT DEFAULT 0`,
@@ -194,6 +196,7 @@ function rowToJob(row: Record<string, unknown>): Job {
     destinationEndpointId: (row.destination_endpoint_id as string) ?? undefined,
     watch:                 Boolean(row.watch),
     schedule:            (row.schedule as string) ?? undefined,
+    autoOptions:         parseAutoOptions(row.auto_options),
     status:              row.status as Job['status'],
     lastRun:             row.last_run != null ? Number(row.last_run) : undefined,
     lastError:           (row.last_error as string) ?? undefined,
@@ -203,6 +206,11 @@ function rowToJob(row: Record<string, unknown>): Job {
 }
 
 function parseJson(value: unknown): Job['reliability'] {
+  if (!value || typeof value !== 'string') return {}
+  try { const p = JSON.parse(value); return p && typeof p === 'object' ? p : {} } catch { return {} }
+}
+
+function parseAutoOptions(value: unknown): Job['autoOptions'] {
   if (!value || typeof value !== 'string') return {}
   try { const p = JSON.parse(value); return p && typeof p === 'object' ? p : {} } catch { return {} }
 }
@@ -412,19 +420,19 @@ export const jobsDb = {
       INSERT INTO jobs
         (id, user_id, org_id, name, source, destination, direction, transfer_mode, deletion_policy, reliability,
          source_device_id, destination_device_id, source_endpoint_id, destination_endpoint_id,
-         watch, schedule, status, created_at, updated_at)
+         watch, schedule, auto_options, status, created_at, updated_at)
       VALUES
         (${full.id}, ${userId}, ${full.orgId ?? null}, ${full.name}, ${full.source}, ${full.destination},
          ${full.direction}, ${full.transferMode ?? 'auto'}, ${full.deletionPolicy ?? 'backup'}, ${JSON.stringify(full.reliability ?? {})},
          ${full.sourceDeviceId ?? null}, ${full.destinationDeviceId ?? null},
          ${full.sourceEndpointId ?? null}, ${full.destinationEndpointId ?? null},
-         ${full.watch ?? false}, ${full.schedule ?? null},
+         ${full.watch ?? false}, ${full.schedule ?? null}, ${JSON.stringify(full.autoOptions ?? {})},
          ${full.status}, ${full.createdAt}, ${full.updatedAt})
     `
     return full
   },
 
-  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'transferMode' | 'deletionPolicy' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'sourceEndpointId' | 'destinationEndpointId' | 'watch' | 'schedule'>>): Promise<Job | undefined> {
+  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'transferMode' | 'deletionPolicy' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'sourceEndpointId' | 'destinationEndpointId' | 'watch' | 'schedule' | 'autoOptions'>>): Promise<Job | undefined> {
     const existing = await jobsDb.get(id)
     if (!existing) return undefined
     const updated: Job = { ...existing, ...patch, updatedAt: Date.now() }
@@ -443,6 +451,7 @@ export const jobsDb = {
         destination_endpoint_id = ${updated.destinationEndpointId ?? null},
         watch = ${updated.watch ?? false},
         schedule = ${updated.schedule ?? null},
+        auto_options = ${JSON.stringify(updated.autoOptions ?? {})},
         updated_at = ${updated.updatedAt}
       WHERE id = ${id}
     `

@@ -15,7 +15,7 @@ import { authFromWsRequest, requireAuth } from './middleware/requireAuth'
 import { hitRateLimit } from './rateLimit'
 import { auditRequest, auditSystem } from './audit'
 import { notifyJob } from './notifications'
-import { schedulerPollMs, shouldRunNow } from './scheduler'
+import { schedulerPollMs, shouldRunInterval, shouldRunNow } from './scheduler'
 import type { AgentToServer, ServerToAgent, ServerToBrowser, Job, DirEntry } from '@sync-tool/shared'
 
 const PORT = parseInt(process.env.PORT ?? '3001', 10)
@@ -170,7 +170,7 @@ async function broadcastJobRun(job: Job) {
   console.warn(`[api] No agents online — job ${job.id} not dispatched`)
 }
 
-async function queueJob(job: Job, reason: 'manual' | 'schedule' | 'watch'): Promise<boolean> {
+async function queueJob(job: Job, reason: 'manual' | 'schedule' | 'watch' | 'startup'): Promise<boolean> {
   if (job.status === 'running' || job.status === 'queued') return false
   await jobsDb.setStatus(job.id, 'queued')
   const queued = { ...job, status: 'queued' as const }
@@ -389,8 +389,16 @@ browserWss.on('connection', async (ws: WebSocket, _req: http.IncomingMessage, au
 async function checkScheduledJobs(): Promise<void> {
   const now = new Date()
   for (const job of await jobsDb.list()) {
-    if (!job.schedule || job.status === 'running' || job.status === 'queued') continue
-    if (shouldRunNow(job.schedule, now, job.lastRun)) await queueJob(job, 'schedule')
+    if (job.status === 'running' || job.status === 'queued') continue
+    const cronDue = job.schedule ? shouldRunNow(job.schedule, now, job.lastRun) : false
+    const intervalDue = shouldRunInterval(job.autoOptions?.periodicEveryMinutes, now, job.lastRun, job.createdAt)
+    if (cronDue || intervalDue) await queueJob(job, 'schedule')
+  }
+}
+
+async function queueStartupJobs(): Promise<void> {
+  for (const job of await jobsDb.list()) {
+    if (job.autoOptions?.onStart) await queueJob(job, 'startup')
   }
 }
 
@@ -478,6 +486,7 @@ async function main() {
   console.log('[api] Database ready')
 
   setInterval(() => { void checkScheduledJobs() }, schedulerPollMs()).unref()
+  void queueStartupJobs()
 
   server.listen(PORT, () => {
     console.log(`[api] Server running on http://localhost:${PORT}`)

@@ -63,7 +63,7 @@ export class JobWatcher {
     })
 
     watcher.on('all', (_event, changedPath) => {
-      this.scheduleTrigger(job.id, changedPath)
+      this.scheduleTrigger(job, changedPath)
     })
     watcher.on('error', (err) => {
       console.warn(`[watch] Job ${job.id} watcher error: ${err instanceof Error ? err.message : String(err)}`)
@@ -73,7 +73,8 @@ export class JobWatcher {
     return watcher
   }
 
-  private scheduleTrigger(jobId: string, changedPath?: string): void {
+  scheduleTrigger(job: Job | string, changedPath?: string): void {
+    const jobId = typeof job === 'string' ? job : job.id
     const count = (this.eventCounts.get(jobId) ?? 0) + 1
     this.eventCounts.set(jobId, count)
     this.lastChangedPaths.set(jobId, changedPath)
@@ -90,7 +91,7 @@ export class JobWatcher {
         console.warn(`[watch] Job ${jobId} received ${eventCount} filesystem events; running full scan`)
       }
       this.triggerJob(jobId, pathToReport)
-    }, this.debounceMs)
+    }, typeof job === 'string' ? this.debounceMs : this.debounceMsFor(job))
     timer.unref()
     this.timers.set(jobId, timer)
   }
@@ -99,6 +100,12 @@ export class JobWatcher {
     const timer = this.timers.get(jobId)
     if (timer) clearTimeout(timer)
     this.timers.delete(jobId)
+  }
+
+  private debounceMsFor(job: Job): number {
+    const delaySec = job.autoOptions?.fileChangeDelaySec
+    if (delaySec == null) return this.debounceMs
+    return Math.max(100, delaySec * 1000)
   }
 }
 

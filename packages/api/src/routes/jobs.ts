@@ -69,7 +69,7 @@ export function createJobsRouter(
       name, source = '', destination = '',
       sourceEndpointId, destinationEndpointId,
       direction = 'ltr', transferMode = 'auto', deletionPolicy = 'backup', reliability = {},
-      sourceDeviceId, destinationDeviceId, watch = false, schedule,
+      sourceDeviceId, destinationDeviceId, watch = false, schedule, autoOptions = {},
     } = req.body
     if (!name) { res.status(400).json({ error: 'name is required' }); return }
     if (!source && !sourceEndpointId) {
@@ -92,7 +92,7 @@ export function createJobsRouter(
         sourceDeviceId, destinationDeviceId,
         sourceEndpointId: sourceEndpointId ?? undefined,
         destinationEndpointId: destinationEndpointId ?? undefined,
-        watch: Boolean(watch), schedule,
+        watch: Boolean(watch), schedule, autoOptions,
       },
       req.userId,
       req.orgId,
@@ -101,7 +101,7 @@ export function createJobsRouter(
     auditRequest(req, 'job.created', {
       targetType: 'job',
       targetId:   job.id,
-      metadata:   { name: job.name, sourceDeviceId, destinationDeviceId, sourceEndpointId, destinationEndpointId, watch: Boolean(watch), schedule },
+      metadata:   { name: job.name, sourceDeviceId, destinationDeviceId, sourceEndpointId, destinationEndpointId, watch: Boolean(watch), schedule, autoOptions },
     })
     res.status(201).json(job)
   })

@@ -16,6 +16,13 @@ export function shouldRunNow(expression: string, now = new Date(), lastRun?: num
   return true
 }
 
+export function shouldRunInterval(everyMinutes: number | undefined, now = new Date(), lastRun?: number, createdAt?: number): boolean {
+  if (!everyMinutes || everyMinutes <= 0) return false
+  const last = lastRun ?? createdAt
+  if (last == null) return true
+  return now.getTime() - last >= everyMinutes * 60_000
+}
+
 export function schedulerPollMs(): number {
   return Math.max(100, parseInt(process.env.SCHEDULER_POLL_MS ?? String(DEFAULT_SCHEDULER_POLL_MS), 10))
 }
