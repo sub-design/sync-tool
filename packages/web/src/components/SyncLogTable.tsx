@@ -160,7 +160,11 @@ export default function SyncLogTable({ entries, onRollback, rollbackingLogId }: 
 
               {/* Transport */}
               <TableCell className="text-sm">
-                {entry.transport_mode === 'relay' ? (
+                {entry.transport_mode === 'direct' ? (
+                  <Badge variant="outline" className="border-green-400 text-green-600 text-xs">direct</Badge>
+                ) : entry.transport_mode === 'p2p' ? (
+                  <Badge variant="outline" className="border-teal-400 text-teal-600 text-xs">p2p</Badge>
+                ) : entry.transport_mode === 'relay' ? (
                   <Badge variant="outline" className="border-blue-300 text-blue-600 text-xs">relay</Badge>
                 ) : entry.transport_mode === 'local' ? (
                   <span className="text-xs text-muted-foreground">local</span>

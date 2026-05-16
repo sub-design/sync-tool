@@ -12,6 +12,8 @@ import { RelayClient } from './relayClient'
 import { canRunRemoteDelta, isRemoteDeltaJob, registerRemoteDeltaHandlers, runRemoteDeltaSync } from './delta/remote'
 import { stateDb } from './state'
 import { JobWatcher } from './watch'
+import { LanDiscovery, getLanScope } from './lanDiscovery'
+import { PeerServer } from './peerServer'
 import type { AgentToServer, ServerToAgent, Job, DirEntry } from '@sync-tool/shared'
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -23,6 +25,8 @@ const RELAY_URL    = process.env.RELAY_URL
 const RELAY_TOKEN  = process.env.RELAY_TOKEN  // shared secret for relay auth
 const RECONNECT_MS = 5_000
 const DEFAULT_CONCURRENCY = Math.max(1, parseInt(process.env.AGENT_CONCURRENCY ?? '2', 10))
+const LAN_ENABLED  = process.env.LAN_DISCOVERY_ENABLED !== 'false'  // on by default
+const PEER_PORT    = parseInt(process.env.PEER_SERVER_PORT ?? '33339', 10)
 
 if (!AGENT_TOKEN) {
   console.warn('[agent] AGENT_TOKEN not set — connection will be rejected by authenticated servers')
@@ -37,6 +41,23 @@ if (RELAY_URL && !RELAY_TOKEN) console.warn('[agent] RELAY_TOKEN not set — rel
 const relay = RELAY_URL ? new RelayClient(RELAY_URL, DEVICE_ID, RELAY_TOKEN) : undefined
 if (relay) {
   registerRemoteDeltaHandlers(relay)
+
+  if (LAN_ENABLED) {
+    const peerServer = new PeerServer(PEER_PORT, RELAY_TOKEN)
+    // Route LAN peer requests through the same handler relay uses
+    peerServer.onRequest((from, method, body) => {
+      const handler = relay.getRequestHandler()
+      if (!handler) throw new Error('No relay handler registered')
+      return handler(from, method, body)
+    })
+    peerServer.start()
+
+    const lanScope     = getLanScope(RELAY_TOKEN)
+    const lanDiscovery = new LanDiscovery(DEVICE_ID, os.hostname(), lanScope, PEER_PORT)
+    relay.setLanDiscovery(lanDiscovery, peerServer)
+    lanDiscovery.start()
+  }
+
   relay.start()
 }
 

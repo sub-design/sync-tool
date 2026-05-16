@@ -2,6 +2,8 @@ import os from 'os'
 import { WebSocket } from 'ws'
 import type { AgentToRelay, RelayToAgent } from '@sync-tool/shared'
 import { P2pManager } from './p2pManager'
+import type { LanDiscovery } from './lanDiscovery'
+import type { PeerServer } from './peerServer'
 
 const REQUEST_TIMEOUT_MS = 120_000
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024
@@ -24,6 +26,8 @@ export interface RelayEnvelope {
   error?: string
 }
 
+export type TransportMode = 'direct' | 'p2p' | 'relay'
+
 type RequestHandler = (from: string, method: string, body: any) => Promise<any>
 
 export class RelayClient {
@@ -31,9 +35,15 @@ export class RelayClient {
   private pending = new Map<string, { resolve: (value: any) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }>()
   private handler?: RequestHandler
   private connected = false
-  private fatalError = false  // set on relay:error to stop reconnecting
+  private fatalError = false
   private reconnectAttempt = 0
   private readonly p2p: P2pManager
+
+  // LAN direct transport
+  private lan?: LanDiscovery
+  private ps?: PeerServer
+  private lanOutgoing = new Map<string, WebSocket>()   // outgoing WS to peer servers
+  private lastTransport = new Map<string, TransportMode>()
 
   constructor(
     private readonly relayUrl: string,
@@ -58,8 +68,25 @@ export class RelayClient {
     this.handler = handler
   }
 
+  getRequestHandler(): RequestHandler | undefined {
+    return this.handler
+  }
+
+  getTransportMode(deviceId: string): TransportMode {
+    return this.lastTransport.get(deviceId) ?? 'relay'
+  }
+
+  setLanDiscovery(lan: LanDiscovery, ps: PeerServer) {
+    this.lan = lan
+    this.ps = ps
+    lan.onPeer((deviceId, peer) => {
+      // Proactively open direct connection so it's ready before first sync
+      this.openLanConnection(deviceId, peer.host, peer.port)
+    })
+  }
+
   async request(to: string, method: string, body: any): Promise<any> {
-    if (!this.isReady()) throw new Error('Relay is not connected')
+    if (!this.canReach(to)) throw new Error('No transport available to reach peer')
 
     const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`
     const envelope: RelayEnvelope = { id, kind: 'request', method, body }
@@ -77,7 +104,7 @@ export class RelayClient {
   }
 
   async event(to: string, method: string, body: any): Promise<void> {
-    if (!this.isReady()) throw new Error('Relay is not connected')
+    if (!this.canReach(to)) throw new Error('No transport available to reach peer')
     this.send(to, {
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       kind: 'event',
@@ -85,6 +112,13 @@ export class RelayClient {
       body,
     })
     await this.waitForBackpressure()
+  }
+
+  private canReach(to: string): boolean {
+    if (this.isReady()) return true
+    if (this.getLanSocket(to)) return true
+    if (this.p2p.isReady(to)) return true
+    return false
   }
 
   private connect() {
@@ -193,10 +227,67 @@ export class RelayClient {
 
   private send(to: string, envelope: RelayEnvelope) {
     const payload = Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64')
-    // Try direct P2P first; fall back to relay if not yet established
-    if (!this.p2p.send(to, payload)) {
-      this.sendRaw({ type: 'relay:data', to, payload })
+
+    // Priority 1: incoming LAN connection (peer connected to our PeerServer)
+    const incomingLan = this.ps?.getSocket(to)
+    if (incomingLan) {
+      incomingLan.send(payload)
+      this.lastTransport.set(to, 'direct')
+      return
     }
+
+    // Priority 2: outgoing LAN connection (we connected to their PeerServer)
+    const outgoingLan = this.getLanOutgoing(to)
+    if (outgoingLan) {
+      outgoingLan.send(payload)
+      this.lastTransport.set(to, 'direct')
+      return
+    }
+
+    // Priority 3: WebRTC P2P
+    if (this.p2p.send(to, payload)) {
+      this.lastTransport.set(to, 'p2p')
+      return
+    }
+
+    // Priority 4: relay fallback
+    this.lastTransport.set(to, 'relay')
+    this.sendRaw({ type: 'relay:data', to, payload })
+  }
+
+  private getLanSocket(to: string): WebSocket | undefined {
+    return this.ps?.getSocket(to) ?? this.getLanOutgoing(to)
+  }
+
+  private getLanOutgoing(to: string): WebSocket | undefined {
+    const ws = this.lanOutgoing.get(to)
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      if (ws) this.lanOutgoing.delete(to)
+      return undefined
+    }
+    return ws
+  }
+
+  private openLanConnection(deviceId: string, host: string, port: number) {
+    if (this.lanOutgoing.has(deviceId)) return
+    const url = `ws://${host}:${port}/?deviceId=${encodeURIComponent(this.deviceId)}&token=${encodeURIComponent(this.token ?? '')}`
+    const ws  = new WebSocket(url)
+
+    ws.on('open', () => {
+      this.lanOutgoing.set(deviceId, ws)
+      console.log(`[lan] Direct connection to ${deviceId.slice(0, 8)} established`)
+    })
+
+    ws.on('message', (raw) => void this.handleData(deviceId, raw.toString()))
+
+    ws.on('close', () => {
+      if (this.lanOutgoing.get(deviceId) === ws) this.lanOutgoing.delete(deviceId)
+    })
+
+    ws.on('error', (err) => {
+      console.error(`[lan] Direct connection to ${deviceId.slice(0, 8)} error:`, err.message)
+      if (this.lanOutgoing.get(deviceId) === ws) this.lanOutgoing.delete(deviceId)
+    })
   }
 
   private sendRaw(msg: AgentToRelay) {

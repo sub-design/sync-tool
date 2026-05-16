@@ -47,6 +47,28 @@ interface RemoteTransferStats {
 const transferSessions = new Map<string, TransferSession>()
 let transferSessionSweeperStarted = false
 
+// Fetches the full remote manifest page-by-page to avoid hitting the 3 MB relay message limit.
+async function fetchRemoteManifest(
+  relay:    RelayClient,
+  deviceId: string,
+  root:     string,
+  signal?:  AbortSignal,
+): Promise<Map<string, RemoteManifestEntry>> {
+  const result = new Map<string, RemoteManifestEntry>()
+  let cursor: number | undefined = undefined
+  do {
+    throwIfAborted(signal)
+    const page = await relay.request(deviceId, 'delta:manifest', { root, cursor }) as {
+      entries: RemoteManifestEntry[]
+      nextCursor?: number
+      total: number
+    }
+    for (const entry of page.entries) result.set(entry.relativePath, entry)
+    cursor = page.nextCursor
+  } while (cursor !== undefined)
+  return result
+}
+
 export function canRunRemoteDelta(job: Job, deviceId: string, relay?: RelayClient): boolean {
   if (!isRemoteDeltaJob(job)) return false
   if (!relay?.isReady()) return false
@@ -95,16 +117,34 @@ export async function runRemoteDeltaSync(
   try {
     throwIfAborted(signal)
     await source.backend.mkdirp(source.rootPath)
-    const [sourceFiles, targetEntries] = await Promise.all([
+    const [sourceFiles, targetFiles] = await Promise.all([
       source.backend.walk(source.rootPath),
-      relay.request(targetDeviceId, 'delta:manifest', { root: targetLocation }) as Promise<RemoteManifestEntry[]>,
+      fetchRemoteManifest(relay, targetDeviceId, targetLocation, signal),
     ])
-
-    const targetFiles  = new Map(targetEntries.map((entry) => [entry.relativePath, entry]))
     const prevState    = state.getJobState(job.id)
     const newState     = new Map<string, StoredFileState>()
-    const entries      = [...sourceFiles.values()].filter((entry) => !entry.isDirectory)
-    let   processed    = 0
+
+    // Detect source-side renames and emit delta:move on target instead of delete+re-upload.
+    // targetFiles is mutated in place: old path removed, new path added.
+    const movedChecksums = await detectRemoteSideMoves({
+      changedFiles:   sourceFiles,
+      mirrorFiles:    targetFiles,
+      prevState,
+      changedSide:    'src',
+      changedBackend: source.backend,
+      moveMirror: async (fromRel, toRel, entry) => {
+        await relay.request(targetDeviceId, 'delta:move', {
+          root: targetLocation, fromRelativePath: fromRel, toRelativePath: toRel,
+          meta: { size: entry.size, mtimeMs: entry.mtimeMs },
+        })
+        console.log(`[remote] Rename ${fromRel} → ${toRel} (${entry.size} bytes saved)`)
+      },
+      mirrorRoot: targetLocation,
+      signal,
+    })
+
+    const entries  = [...sourceFiles.values()].filter((entry) => !entry.isDirectory)
+    let   processed = 0
 
     for (const sourceEntry of entries) {
       throwIfAborted(signal)
@@ -113,9 +153,10 @@ export async function runRemoteDeltaSync(
         || targetEntry.size !== sourceEntry.size
         || (!mtimeEqual(sourceEntry.mtimeMs, targetEntry.mtimeMs) && sourceEntry.mtimeMs > targetEntry.mtimeMs)
 
+      let transferred: RemoteTransferStats | undefined
       if (needsCopy) {
         try {
-          const transferred = targetEntry
+          transferred = targetEntry
             ? await transferRemoteDelta(relay, targetDeviceId, sourceEntry, source.backend, targetLocation, job.transferMode ?? 'auto', signal)
             : await transferRemoteFull(relay, targetDeviceId, sourceEntry, source.backend, targetLocation, signal)
 
@@ -129,13 +170,15 @@ export async function runRemoteDeltaSync(
         result.filesSkipped++
       }
 
-      // Track state so deletion policies can work on subsequent runs.
+      // Persist checksum so rename detection works on the next sync run.
       newState.set(sourceEntry.relativePath, {
         srcSize:    sourceEntry.size,
         srcMtimeMs: sourceEntry.mtimeMs,
         dstSize:    targetEntry?.size    ?? sourceEntry.size,
         dstMtimeMs: targetEntry?.mtimeMs ?? sourceEntry.mtimeMs,
-        checksum:   undefined,
+        checksum:   transferred?.checksum
+          ?? movedChecksums.get(sourceEntry.relativePath)
+          ?? prevState.get(sourceEntry.relativePath)?.checksum,
         syncedAt:   Date.now(),
       })
 
@@ -182,6 +225,7 @@ export async function runRemoteDeltaSync(
     state.setJobState(job.id, newState)
   } finally {
     result.endedAt = Date.now()
+    result.transportMode = relay.getTransportMode(targetDeviceId)
     await source.backend.close?.()
   }
 
@@ -203,12 +247,10 @@ async function runRemoteBidirectionalSync(
     await assertAllowedLocalEndpoint(job.source)
     throwIfAborted(signal)
     await source.backend.mkdirp(source.rootPath)
-    const [sourceFiles, targetEntries] = await Promise.all([
+    const [sourceFiles, targetFiles] = await Promise.all([
       source.backend.walk(source.rootPath),
-      relay.request(destinationDeviceId, 'delta:manifest', { root: job.destination }) as Promise<RemoteManifestEntry[]>,
+      fetchRemoteManifest(relay, destinationDeviceId, job.destination, signal),
     ])
-
-    const targetFiles   = new Map(targetEntries.map((entry) => [entry.relativePath, entry]))
     const prevState     = state.getJobState(job.id)
     const newState      = new Map<string, StoredFileState>()
     const movedChecksums = await detectAndApplyRemoteMoves({
@@ -325,6 +367,7 @@ async function runRemoteBidirectionalSync(
     if (conflictCount > 0) console.log(`[remote] ${conflictCount} conflict(s) resolved by newer-wins tiebreaker`)
   } finally {
     result.endedAt = Date.now()
+    result.transportMode = relay.getTransportMode(destinationDeviceId)
     await source.backend.close?.()
   }
 
@@ -337,11 +380,11 @@ export function registerRemoteDeltaHandlers(relay: RelayClient) {
     validateRemoteDeltaRequest(method, body)
     switch (method) {
       case 'delta:manifest':
-        return handleManifest(body.root)
+        return handleManifest(body.root, body.cursor)
       case 'delta:signature':
         return handleSignature(body.root, body.relativePath)
       case 'delta:transfer-start':
-        return handleTransferStart(body.kind, body.root, body.relativePath, body.meta)
+        return handleTransferStart(body.kind, body.root, body.relativePath, body.meta, body.proposedId)
       case 'delta:transfer-chunk':
         return handleTransferChunk(body.transferId, body.seq, body.dataBase64)
       case 'delta:transfer-finish':
@@ -370,6 +413,7 @@ export function validateRemoteDeltaRequest(method: string, body: any): void {
   switch (method) {
     case 'delta:manifest':
       requireString(body, 'root')
+      if (body.cursor !== undefined && typeof body.cursor !== 'number') throw new Error('delta:manifest cursor must be a number')
       return
 
     case 'delta:signature':
@@ -381,6 +425,7 @@ export function validateRemoteDeltaRequest(method: string, body: any): void {
       if (body.kind !== 'delta' && body.kind !== 'full') throw new Error('Invalid transfer kind')
       requireString(body, 'root')
       requireString(body, 'relativePath')
+      if (body.proposedId !== undefined && typeof body.proposedId !== 'string') throw new Error('Invalid proposedId')
       requireTransferMeta(body.meta)
       return
 
@@ -512,7 +557,7 @@ interface RemoteSideMoveInput {
   signal?: AbortSignal
 }
 
-async function detectRemoteSideMoves(input: RemoteSideMoveInput): Promise<Map<string, string>> {
+export async function detectRemoteSideMoves(input: RemoteSideMoveInput): Promise<Map<string, string>> {
   const movedChecksums = new Map<string, string>()
   const missingByChecksum = new Map<string, string[]>()
 
@@ -767,16 +812,31 @@ async function uploadFileInChunks(
   signal?: AbortSignal,
 ): Promise<void> {
   throwIfAborted(signal)
-  const { transferId } = await relay.request(targetDeviceId, 'delta:transfer-start', {
+
+  // Deterministic ID: same file + same target → same ID across reconnects, enabling resume.
+  const proposedId = crypto.createHash('sha256')
+    .update(`${targetDeviceId}:${input.root}:${input.relativePath}:${input.meta.size}:${input.meta.mtimeMs}`)
+    .digest('hex')
+    .slice(0, 32)
+
+  const { transferId, resumeFromSeq } = await relay.request(targetDeviceId, 'delta:transfer-start', {
     kind:         input.kind,
     root:         input.root,
     relativePath: input.relativePath,
     meta:         input.meta,
-  }) as { transferId: string }
+    proposedId,
+  }) as { transferId: string; resumeFromSeq: number }
 
-  let seq = 0
+  const startByte = resumeFromSeq * RELAY_CHUNK_BYTES
+  let seq = resumeFromSeq
+  if (resumeFromSeq > 0) {
+    console.log(`[transfer] Resuming upload of ${input.relativePath} from byte ${startByte} (chunk ${resumeFromSeq})`)
+  }
+
   try {
-    for await (const chunk of fs.createReadStream(input.filePath, { highWaterMark: RELAY_CHUNK_BYTES })) {
+    const readOpts: Parameters<typeof fs.createReadStream>[1] = { highWaterMark: RELAY_CHUNK_BYTES }
+    if (startByte > 0) readOpts.start = startByte
+    for await (const chunk of fs.createReadStream(input.filePath, readOpts)) {
       throwIfAborted(signal)
       await relay.event(targetDeviceId, 'delta:transfer-chunk', {
         transferId,
@@ -853,23 +913,42 @@ async function uploadStreamInChunks(
   }
 }
 
-async function handleManifest(root: string): Promise<RemoteManifestEntry[]> {
+// Manifest page size chosen to stay well under the 3 MB relay message limit (~40 KB/page).
+const MANIFEST_PAGE_SIZE  = 500
+const MANIFEST_CACHE_TTL  = 60_000
+
+interface ManifestCacheEntry {
+  entries:   RemoteManifestEntry[]
+  expiresAt: number
+}
+const manifestCache = new Map<string, ManifestCacheEntry>()
+
+async function handleManifest(
+  root:    string,
+  cursor?: number,
+): Promise<{ entries: RemoteManifestEntry[]; nextCursor?: number; total: number }> {
   await assertAllowedLocalEndpoint(root)
-  const target = resolveBackend(root)
-  try {
-    await target.backend.mkdirp(target.rootPath)
-    const files = await target.backend.walk(target.rootPath)
-    return [...files.values()]
-      .filter((entry) => !entry.isDirectory)
-      .map((entry) => ({
-        relativePath: entry.relativePath,
-        absolutePath: entry.absolutePath,
-        size:         entry.size,
-        mtimeMs:      entry.mtimeMs,
-      }))
-  } finally {
-    await target.backend.close?.()
+
+  let cached = manifestCache.get(root)
+  if (!cached || Date.now() > cached.expiresAt) {
+    const target = resolveBackend(root)
+    try {
+      await target.backend.mkdirp(target.rootPath)
+      const files   = await target.backend.walk(target.rootPath)
+      const entries = [...files.values()]
+        .filter((e) => !e.isDirectory)
+        .map((e) => ({ relativePath: e.relativePath, absolutePath: e.absolutePath, size: e.size, mtimeMs: e.mtimeMs }))
+      cached = { entries, expiresAt: Date.now() + MANIFEST_CACHE_TTL }
+      manifestCache.set(root, cached)
+    } finally {
+      await target.backend.close?.()
+    }
   }
+
+  const offset     = cursor ?? 0
+  const page       = cached.entries.slice(offset, offset + MANIFEST_PAGE_SIZE)
+  const nextCursor = offset + MANIFEST_PAGE_SIZE < cached.entries.length ? offset + MANIFEST_PAGE_SIZE : undefined
+  return { entries: page, nextCursor, total: cached.entries.length }
 }
 
 async function handleSignature(root: string, relativePath: string): Promise<{ signature: any }> {
@@ -1038,11 +1117,23 @@ async function handleTransferStart(
   root: string,
   relativePath: string,
   meta: { size: number; mtimeMs: number },
+  proposedId?: string,
 ) {
   if (kind !== 'delta' && kind !== 'full') throw new Error(`Unsupported transfer kind: ${kind}`)
   assertSafeRelativePath(relativePath)
   await assertAllowedLocalEndpoint(root)
-  const transferId = crypto.randomUUID()
+
+  // If the initiator proposes a deterministic ID, check for a resumable session.
+  if (proposedId) {
+    const existing = transferSessions.get(proposedId)
+    if (existing && existing.kind === kind && existing.relativePath === relativePath && !existing.writeError) {
+      existing.updatedAt = Date.now()
+      console.log(`[transfer] Resuming ${relativePath} from chunk ${existing.nextSeq}`)
+      return { transferId: proposedId, resumeFromSeq: existing.nextSeq }
+    }
+  }
+
+  const transferId = proposedId ?? crypto.randomUUID()
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sync-tool-transfer-'))
   const tempPath = path.join(tempDir, `${transferId}.payload`)
   transferSessions.set(transferId, {
@@ -1056,7 +1147,7 @@ async function handleTransferStart(
     updatedAt: Date.now(),
     writeChain: Promise.resolve(),
   })
-  return { transferId }
+  return { transferId, resumeFromSeq: 0 }
 }
 
 async function handleTransferChunk(transferId: string, seq: number, dataBase64: string) {

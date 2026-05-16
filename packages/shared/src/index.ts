@@ -152,7 +152,7 @@ export interface SyncResult {
   fullBytes?:       number
   deltaFiles?:      number
   fullFiles?:       number
-  transportMode?:   'local' | 'relay'
+  transportMode?:   'local' | 'direct' | 'p2p' | 'relay'
   errors:           string[]
   rollbackManifest?: RollbackManifest
 }
