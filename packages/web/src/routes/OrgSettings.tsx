@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { UserPlus, Trash2, ChevronDown } from 'lucide-react'
+import { toast } from 'sonner'
 import Shell from '@/components/Shell'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -51,6 +52,7 @@ export default function OrgSettings() {
       setInviteEmail('')
       setInviteRole('member')
       setInviteError('')
+      toast.success('Member invited')
     },
     onError: (err: Error) => setInviteError(err.message),
   })
@@ -64,7 +66,9 @@ export default function OrgSettings() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['org-current'] })
       setRemoveTarget(null)
+      toast.success('Member removed')
     },
+    onError: () => toast.error('Failed to remove member'),
   })
 
   // ── Change role ───────────────────────────────────────────────────────────
@@ -72,7 +76,11 @@ export default function OrgSettings() {
   const roleMutation = useMutation({
     mutationFn: ({ userId, role }: { userId: string; role: OrgRole }) =>
       orgsApi.updateMemberRole(userId, role),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['org-current'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['org-current'] })
+      toast.success('Role updated')
+    },
+    onError: () => toast.error('Failed to update role'),
   })
 
   if (isLoading) return <Shell><p className="text-muted-foreground text-sm">Loading…</p></Shell>

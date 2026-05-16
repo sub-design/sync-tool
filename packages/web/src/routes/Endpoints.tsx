@@ -4,6 +4,7 @@ import {
   HardDrive, Server, Terminal, Network, CloudUpload,
   Plus, Pencil, Trash2, Loader2, Lock,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import Shell from '@/components/Shell'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -184,6 +185,7 @@ function EndpointDialog({
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['endpoints'] })
+      toast.success(initial ? 'Endpoint updated' : 'Endpoint created')
       onClose()
     },
     onError: (err: Error) => setError(err.message),
@@ -263,6 +265,7 @@ function DeleteDialog({
     mutationFn: () => endpointsApi.delete(endpoint!.id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['endpoints'] })
+      toast.success('Endpoint deleted')
       onClose()
     },
     onError: async (err: Error & { response?: Response }) => {

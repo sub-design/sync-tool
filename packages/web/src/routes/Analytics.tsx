@@ -4,6 +4,10 @@ import { Link } from 'react-router-dom'
 import {
   Activity, HardDrive, Files, CheckCircle2, XCircle, TrendingUp,
 } from 'lucide-react'
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Legend,
+} from 'recharts'
 import Shell from '@/components/Shell'
 import { getAnalytics, type DailyActivity, type JobStat } from '@/lib/api'
 
@@ -27,7 +31,14 @@ function pct(a: number, b: number): string {
   return `${Math.round((a / b) * 100)}%`
 }
 
-// ── Inline SVG bar chart ──────────────────────────────────────────────────────
+// ── Recharts bar chart ────────────────────────────────────────────────────────
+
+interface ChartDataPoint {
+  date: string
+  label: string
+  successful: number
+  errors: number
+}
 
 function ActivityChart({ data }: { data: DailyActivity[] }) {
   if (data.length === 0) {
@@ -38,86 +49,72 @@ function ActivityChart({ data }: { data: DailyActivity[] }) {
     )
   }
 
-  const W = 720, H = 80, pad = { t: 4, b: 24, l: 0, r: 0 }
-  const innerW = W - pad.l - pad.r
-  const innerH = H - pad.t - pad.b
-
-  // Fill in gaps so every day in range is represented
+  // Fill gaps so every day in range is represented
   const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date))
   const byDate = Object.fromEntries(sorted.map(d => [d.date, d]))
   const first  = new Date(sorted[0].date)
   const last   = new Date(sorted[sorted.length - 1].date)
-  const days: DailyActivity[] = []
+  const days: ChartDataPoint[] = []
   for (let d = new Date(first); d <= last; d.setDate(d.getDate() + 1)) {
     const key = d.toISOString().slice(0, 10)
-    days.push(byDate[key] ?? { date: key, runs: 0, errors: 0, bytes: 0 })
+    const entry = byDate[key] ?? { date: key, runs: 0, errors: 0, bytes: 0 }
+    days.push({
+      date: key,
+      label: key.slice(5), // MM-DD
+      successful: Math.max(0, entry.runs - entry.errors),
+      errors: entry.errors,
+    })
   }
 
-  const maxRuns = Math.max(...days.map(d => d.runs), 1)
-  const barW    = innerW / days.length
-  const gap     = Math.max(1, barW * 0.15)
-
-  // Show ~6 date labels evenly spaced
-  const labelStep = Math.max(1, Math.floor(days.length / 6))
+  // Only show every N-th label to avoid crowding
+  const labelStep = Math.max(1, Math.floor(days.length / 7))
 
   return (
-    <div className="w-full overflow-x-auto">
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        className="w-full"
-        style={{ minWidth: 300 }}
-        aria-label="Daily sync activity"
-      >
-        {days.map((day, i) => {
-          const barH  = (day.runs / maxRuns) * innerH
-          const errH  = day.runs > 0 ? (day.errors / day.runs) * barH : 0
-          const okH   = barH - errH
-          const x     = pad.l + i * barW + gap / 2
-          const w     = barW - gap
-
-          return (
-            <g key={day.date}>
-              {/* success portion */}
-              {okH > 0 && (
-                <rect
-                  x={x} y={pad.t + innerH - barH} width={w} height={okH}
-                  rx={2}
-                  className="fill-primary/70"
-                />
-              )}
-              {/* error portion stacked on top */}
-              {errH > 0 && (
-                <rect
-                  x={x} y={pad.t + innerH - barH + okH} width={w} height={errH}
-                  rx={2}
-                  className="fill-destructive/70"
-                />
-              )}
-              {/* date label */}
-              {i % labelStep === 0 && (
-                <text
-                  x={x + w / 2} y={H - 4}
-                  textAnchor="middle"
-                  fontSize={9}
-                  className="fill-muted-foreground"
-                >
-                  {day.date.slice(5)} {/* MM-DD */}
-                </text>
-              )}
-            </g>
-          )
-        })}
-      </svg>
-      <div className="flex items-center gap-4 mt-1 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-2 h-2 rounded-sm bg-primary/70" />
-          Successful
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-2 h-2 rounded-sm bg-destructive/70" />
-          Errors
-        </span>
-      </div>
+    <div className="w-full h-[200px]">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart
+          data={days}
+          margin={{ top: 4, right: 8, left: -20, bottom: 4 }}
+          barSize={Math.max(4, Math.min(20, 400 / days.length))}
+        >
+          <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" vertical={false} />
+          <XAxis
+            dataKey="label"
+            tick={{ fontSize: 11 }}
+            tickLine={false}
+            axisLine={false}
+            className="text-muted-foreground"
+            interval={labelStep - 1}
+          />
+          <YAxis
+            tick={{ fontSize: 11 }}
+            tickLine={false}
+            axisLine={false}
+            className="text-muted-foreground"
+            allowDecimals={false}
+          />
+          <Tooltip
+            content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null
+              const succ = (payload.find(p => p.dataKey === 'successful')?.value as number) ?? 0
+              const err  = (payload.find(p => p.dataKey === 'errors')?.value as number) ?? 0
+              return (
+                <div className="rounded-lg border bg-background px-3 py-2 shadow-md text-xs">
+                  <p className="font-medium mb-1">{label}</p>
+                  <p className="text-green-600">{succ} successful</p>
+                  {err > 0 && <p className="text-destructive">{err} error{err > 1 ? 's' : ''}</p>}
+                </div>
+              )
+            }}
+          />
+          <Legend
+            wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
+            formatter={(value: string) => value === 'successful' ? 'Successful' : 'Errors'}
+          />
+          <Bar dataKey="successful" stackId="a" className="fill-primary/70" radius={[0, 0, 0, 0]} />
+          <Bar dataKey="errors"     stackId="a" className="fill-destructive/70" radius={[2, 2, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
     </div>
   )
 }
@@ -279,7 +276,7 @@ export default function Analytics() {
         <div className="border rounded-lg p-4 space-y-3">
           <h2 className="text-sm font-medium">Daily activity</h2>
           {isLoading
-            ? <div className="h-20 bg-muted/30 rounded animate-pulse" />
+            ? <div className="h-[200px] bg-muted/30 rounded animate-pulse" />
             : <ActivityChart data={data?.dailyActivity ?? []} />
           }
         </div>

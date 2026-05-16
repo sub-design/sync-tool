@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { ArrowLeft, Clock, Loader2, MoreHorizontal, Pencil, Play, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -14,6 +15,7 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import Shell from '@/components/Shell'
 import SyncLogTable, { type SyncLogEntry } from '@/components/SyncLogTable'
 import type { RollbackPreview } from '@/lib/api'
 import JobForm from '@/components/JobForm'
@@ -100,20 +102,35 @@ export default function JobDetail() {
 
   async function handleRun() {
     if (!id) return
-    await api.runJob(id)
-    queryClient.invalidateQueries({ queryKey: ['job', id] })
+    try {
+      await api.runJob(id)
+      queryClient.invalidateQueries({ queryKey: ['job', id] })
+      toast.success('Job started')
+    } catch {
+      toast.error('Failed to start job')
+    }
   }
 
   async function handleCancel() {
     if (!id) return
-    await api.cancelJob(id)
-    queryClient.invalidateQueries({ queryKey: ['job', id] })
+    try {
+      await api.cancelJob(id)
+      queryClient.invalidateQueries({ queryKey: ['job', id] })
+      toast.success('Job cancelled')
+    } catch {
+      toast.error('Failed to cancel job')
+    }
   }
 
   async function handleDelete() {
     if (!id) return
-    await api.deleteJob(id)
-    navigate('/')
+    try {
+      await api.deleteJob(id)
+      navigate('/')
+      toast.success('Job deleted')
+    } catch {
+      toast.error('Failed to delete job')
+    }
   }
 
   async function handleRollbackRequest(entry: SyncLogEntry) {
@@ -123,6 +140,8 @@ export default function JobDetail() {
       const preview = await api.getRollbackPreview(id, entry.id)
       setRollbackPreview(preview)
       setRollbackEntry(entry)
+    } catch {
+      toast.error('Failed to load rollback preview')
     } finally {
       setRollbackLoading(false)
     }
@@ -130,8 +149,13 @@ export default function JobDetail() {
 
   async function handleRollbackConfirm() {
     if (!id || !rollbackEntry) return
-    await api.triggerRollback(id, rollbackEntry.id)
-    setRollbackingLogId(rollbackEntry.id)
+    try {
+      await api.triggerRollback(id, rollbackEntry.id)
+      setRollbackingLogId(rollbackEntry.id)
+      toast.success('Rollback started')
+    } catch {
+      toast.error('Failed to start rollback')
+    }
     setRollbackEntry(null)
     setRollbackPreview(null)
   }
@@ -140,8 +164,8 @@ export default function JobDetail() {
   const progress = id ? jobProgress.get(id) : undefined
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <main className="mx-auto w-full max-w-[960px] px-6 py-6 space-y-6">
+    <Shell>
+      <div className="space-y-6">
         <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
           <ArrowLeft />
           Back
@@ -319,7 +343,7 @@ export default function JobDetail() {
             </AlertDialog>
           </>
         )}
-      </main>
-    </div>
+      </div>
+    </Shell>
   )
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, Plus, RotateCw, Trash2, Monitor, WifiOff } from 'lucide-react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -23,7 +24,11 @@ export default function Devices() {
 
   const deleteMutation = useMutation({
     mutationFn: api.deleteDevice,
-    onSuccess:  () => queryClient.invalidateQueries({ queryKey: ['devices'] }),
+    onSuccess:  () => {
+      queryClient.invalidateQueries({ queryKey: ['devices'] })
+      toast.success('Token revoked')
+    },
+    onError: () => toast.error('Failed to revoke token'),
   })
 
   const rotateMutation = useMutation({
@@ -32,7 +37,9 @@ export default function Devices() {
       setNewToken(result.token)
       setCreateOpen(true)
       queryClient.invalidateQueries({ queryKey: ['devices'] })
+      toast.success('Token rotated — copy the new token')
     },
+    onError: () => toast.error('Failed to rotate token'),
   })
 
   // ── Create token dialog ───────────────────────────────────────────────────────
@@ -48,7 +55,9 @@ export default function Devices() {
       setNewToken(result.token)
       setTokenName('')
       queryClient.invalidateQueries({ queryKey: ['devices'] })
+      toast.success('Token created — copy it before closing')
     },
+    onError: () => toast.error('Failed to create token'),
   })
 
   function handleCreate(e: React.FormEvent) {
