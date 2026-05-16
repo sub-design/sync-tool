@@ -115,6 +115,25 @@ export function listAudit(limit = 100): Promise<AuditEntry[]> {
   return apiFetch(`/api/audit?limit=${limit}`)
 }
 
+export interface AnalyticsSummary {
+  totalRuns: number; successfulRuns: number; errorRuns: number
+  totalBytesTransferred: number; totalFilesCopied: number; totalFilesDeleted: number
+  periodDays: number
+}
+export interface DailyActivity { date: string; runs: number; errors: number; bytes: number }
+export interface JobStat {
+  jobId: string; jobName: string; runs: number; successfulRuns: number
+  totalBytes: number; totalFiles: number; lastRun: number | null
+}
+export interface AnalyticsData {
+  summary: AnalyticsSummary
+  dailyActivity: DailyActivity[]
+  byJob: JobStat[]
+}
+export function getAnalytics(days = 30): Promise<AnalyticsData> {
+  return apiFetch(`/api/analytics?days=${days}`)
+}
+
 export interface RollbackPreview {
   logId: number
   status: string

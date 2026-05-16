@@ -10,6 +10,7 @@ import { createDevicesRouter } from './routes/devices'
 import { createAuditRouter } from './routes/audit'
 import { createEndpointsRouter } from './routes/endpoints'
 import { createOrgsRouter } from './routes/orgs'
+import { createAnalyticsRouter } from './routes/analytics'
 import { authFromWsRequest, requireAuth } from './middleware/requireAuth'
 import { hitRateLimit } from './rateLimit'
 import { auditRequest, auditSystem } from './audit'
@@ -397,6 +398,7 @@ async function checkScheduledJobs(): Promise<void> {
 
 app.use('/api/auth',      createAuthRouter())
 app.use('/api/orgs',      createOrgsRouter())
+app.use('/api/analytics', createAnalyticsRouter())
 app.use('/api/devices',   createDevicesRouter())
 app.use('/api/audit',     createAuditRouter())
 app.use('/api/endpoints', createEndpointsRouter())

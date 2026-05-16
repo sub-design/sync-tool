@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Server, Settings2 } from 'lucide-react'
+import { Server, Settings2, BarChart3 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useWsStore } from '@/lib/ws'
@@ -59,6 +59,17 @@ export default function Shell({ children }: ShellProps) {
               <span className="flex items-center gap-1">
                 <Server size={13} />
                 Endpoints
+              </span>
+            </NavLink>
+            <NavLink
+              to="/analytics"
+              className={({ isActive }) =>
+                isActive ? 'font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+              }
+            >
+              <span className="flex items-center gap-1">
+                <BarChart3 size={13} />
+                Analytics
               </span>
             </NavLink>
             <NavLink

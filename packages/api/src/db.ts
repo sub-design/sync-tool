@@ -720,6 +720,120 @@ export const logDb = {
   },
 }
 
+// ── Analytics ─────────────────────────────────────────────────────────────────
+
+export interface AnalyticsSummary {
+  totalRuns:          number
+  successfulRuns:     number
+  errorRuns:          number
+  totalBytesTransferred: number
+  totalFilesCopied:   number
+  totalFilesDeleted:  number
+  periodDays:         number
+}
+
+export interface DailyActivity {
+  date:   string   // YYYY-MM-DD
+  runs:   number
+  errors: number
+  bytes:  number
+}
+
+export interface JobStat {
+  jobId:          string
+  jobName:        string
+  runs:           number
+  successfulRuns: number
+  totalBytes:     number
+  totalFiles:     number
+  lastRun:        number | null
+}
+
+export const analyticsDb = {
+  async summary(orgId: string, periodDays = 30): Promise<AnalyticsSummary> {
+    const since = Date.now() - periodDays * 86_400_000
+    const [row] = await sql`
+      SELECT
+        COUNT(sl.id)::int                                              AS total_runs,
+        COUNT(sl.id) FILTER (WHERE sl.status = 'completed')::int      AS successful_runs,
+        COUNT(sl.id) FILTER (WHERE sl.status = 'error')::int          AS error_runs,
+        COALESCE(SUM(sl.bytes_transferred), 0)::bigint                AS total_bytes,
+        COALESCE(SUM(sl.files_copied),      0)::int                   AS total_files_copied,
+        COALESCE(SUM(sl.files_deleted),     0)::int                   AS total_files_deleted
+      FROM sync_log sl
+      JOIN jobs j ON j.id = sl.job_id
+      WHERE j.org_id = ${orgId}
+        AND sl.started_at >= ${since}
+        AND sl.is_rollback = false
+    `
+    return {
+      totalRuns:             Number(row.total_runs     ?? 0),
+      successfulRuns:        Number(row.successful_runs ?? 0),
+      errorRuns:             Number(row.error_runs     ?? 0),
+      totalBytesTransferred: Number(row.total_bytes    ?? 0),
+      totalFilesCopied:      Number(row.total_files_copied  ?? 0),
+      totalFilesDeleted:     Number(row.total_files_deleted ?? 0),
+      periodDays,
+    }
+  },
+
+  async dailyActivity(orgId: string, periodDays = 30): Promise<DailyActivity[]> {
+    const since = Date.now() - periodDays * 86_400_000
+    const rows = await sql`
+      SELECT
+        to_char(to_timestamp(sl.started_at / 1000) AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS date,
+        COUNT(sl.id)::int                                             AS runs,
+        COUNT(sl.id) FILTER (WHERE sl.status = 'error')::int         AS errors,
+        COALESCE(SUM(sl.bytes_transferred), 0)::bigint               AS bytes
+      FROM sync_log sl
+      JOIN jobs j ON j.id = sl.job_id
+      WHERE j.org_id = ${orgId}
+        AND sl.started_at >= ${since}
+        AND sl.is_rollback = false
+      GROUP BY 1
+      ORDER BY 1
+    `
+    return rows.map(r => ({
+      date:   r.date as string,
+      runs:   Number(r.runs),
+      errors: Number(r.errors),
+      bytes:  Number(r.bytes),
+    }))
+  },
+
+  async byJob(orgId: string, periodDays = 30): Promise<JobStat[]> {
+    const since = Date.now() - periodDays * 86_400_000
+    const rows = await sql`
+      SELECT
+        j.id                                                                         AS job_id,
+        j.name                                                                       AS job_name,
+        COUNT(sl.id)::int                                                            AS runs,
+        COUNT(sl.id) FILTER (WHERE sl.status = 'completed')::int                    AS successful_runs,
+        COALESCE(SUM(sl.bytes_transferred), 0)::bigint                              AS total_bytes,
+        COALESCE(SUM(sl.files_copied), 0)::int                                      AS total_files,
+        MAX(sl.started_at)::bigint                                                   AS last_run
+      FROM jobs j
+      LEFT JOIN sync_log sl
+        ON sl.job_id = j.id
+        AND sl.is_rollback = false
+        AND sl.started_at >= ${since}
+      WHERE j.org_id = ${orgId}
+      GROUP BY j.id, j.name
+      ORDER BY total_bytes DESC NULLS LAST, runs DESC
+      LIMIT 25
+    `
+    return rows.map(r => ({
+      jobId:          r.job_id as string,
+      jobName:        r.job_name as string,
+      runs:           Number(r.runs),
+      successfulRuns: Number(r.successful_runs),
+      totalBytes:     Number(r.total_bytes),
+      totalFiles:     Number(r.total_files),
+      lastRun:        r.last_run != null ? Number(r.last_run) : null,
+    }))
+  },
+}
+
 // ── Organizations ─────────────────────────────────────────────────────────────
 
 function rowToOrg(row: Record<string, unknown>): Organization {
