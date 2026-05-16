@@ -15,11 +15,12 @@ files:
   - assets/**/*
   - package.json
 extraResources:
-  # Bundled agent (single JS file with all deps inlined via esbuild)
+  # Bundled agent plus external native modules copied by packages/agent/build-bundle.mjs.
   - from: ../agent/bundle
     to: agent
     filter:
       - "*.js"
+      - "node_modules/**/*"
 mac:
   category: public.app-category.productivity
   icon: assets/icon.icns

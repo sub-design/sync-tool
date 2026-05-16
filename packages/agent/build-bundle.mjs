@@ -1,9 +1,11 @@
 // Bundles the agent into a single self-contained JS file.
-// Native-only optional deps (fsevents, cpu-features, sshcrypto) are marked
-// external — they'll be missing at runtime, but their functionality degrades
-// gracefully (chokidar falls back to polling, ssh2 uses pure-JS crypto).
+// Native addons are marked external because esbuild cannot inline .node files.
 import { build } from 'esbuild'
-import { mkdirSync } from 'fs'
+import { createRequire } from 'module'
+import { cpSync, mkdirSync, rmSync } from 'fs'
+import { dirname, join } from 'path'
+
+const require = createRequire(import.meta.url)
 
 mkdirSync('bundle', { recursive: true })
 
@@ -14,7 +16,8 @@ await build({
   target: 'node20',
   outfile: 'bundle/index.js',
   external: [
-    // Native addons — cannot be bundled, degrade gracefully
+    // Native addons — cannot be bundled into a single JS file.
+    'better-sqlite3',
     'node-datachannel', // WebRTC P2P (optional relay feature), uses ESM + native .node
     'fsevents',         // chokidar on macOS (falls back to polling)
     'cpu-features',     // ssh2 perf (optional)
@@ -28,4 +31,23 @@ await build({
   logLevel: 'warning',
 })
 
+const betterSqlitePackage = require.resolve('better-sqlite3/package.json')
+const betterSqliteRequire = createRequire(betterSqlitePackage)
+
+copyRuntimePackage('better-sqlite3', require)
+copyRuntimePackage('bindings', betterSqliteRequire)
+copyRuntimePackage('file-uri-to-path', betterSqliteRequire)
+
 console.log('✓ Agent bundled → bundle/index.js')
+
+function copyRuntimePackage(name, resolver) {
+  const packageDir = dirname(resolver.resolve(`${name}/package.json`))
+  const targetDir = join('bundle', 'node_modules', name)
+  rmSync(targetDir, { recursive: true, force: true })
+  mkdirSync(dirname(targetDir), { recursive: true })
+  cpSync(packageDir, targetDir, {
+    recursive: true,
+    dereference: true,
+    filter: (src) => !src.includes(`${packageDir}/build/Debug`),
+  })
+}

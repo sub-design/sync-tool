@@ -9,7 +9,7 @@ process.env.STATE_DIR = stateRoot
 
 const { stateDb } = require('../dist/state.js')
 
-test('stateDb stores each job in an isolated file', () => {
+test('stateDb stores each job in SQLite and keeps jobs isolated', () => {
   stateDb.setJobState('job-one', new Map([
     ['one.txt', makeState(1)],
   ]))
@@ -17,51 +17,67 @@ test('stateDb stores each job in an isolated file', () => {
     ['two.txt', makeState(2)],
   ]))
 
-  assert.equal(fs.existsSync(path.join(stateRoot, 'jobs', 'job-one.json')), true)
-  assert.equal(fs.existsSync(path.join(stateRoot, 'jobs', 'job-two.json')), true)
+  assert.equal(fs.existsSync(path.join(stateRoot, 'agent-state.sqlite')), true)
+  assert.equal(fs.existsSync(path.join(stateRoot, 'jobs', 'job-one.json')), false)
   assert.deepEqual([...stateDb.getJobState('job-one').keys()], ['one.txt'])
   assert.deepEqual([...stateDb.getJobState('job-two').keys()], ['two.txt'])
 })
 
+test('stateDb migrates per-job JSON state into SQLite on first read', () => {
+  const jobId = 'per-job-legacy'
+  const jobsDir = path.join(stateRoot, 'jobs')
+  fs.mkdirSync(jobsDir, { recursive: true })
+  fs.writeFileSync(path.join(jobsDir, `${jobId}.json`), JSON.stringify({
+    'per-job.txt': makeState(3),
+  }), 'utf8')
+
+  const loaded = stateDb.getJobState(jobId)
+
+  assert.equal(loaded.get('per-job.txt').srcSize, 3)
+  assert.equal(stateDb.getJobState(jobId), loaded)
+})
+
 test('stateDb falls back to legacy all-jobs state when per-job file is absent', () => {
-  const jobId = 'legacy-job'
+  const jobId = 'all-jobs-legacy'
   fs.writeFileSync(path.join(stateRoot, 'agent-state.json'), JSON.stringify({
     [jobId]: {
-      'legacy.txt': makeState(3),
+      'legacy.txt': makeState(4),
     },
   }), 'utf8')
 
   const loaded = stateDb.getJobState(jobId)
 
-  assert.equal(loaded.get('legacy.txt').srcSize, 3)
+  assert.equal(loaded.get('legacy.txt').srcSize, 4)
 })
 
 test('stateDb returns cached state for repeated reads in one process', () => {
   const jobId = 'cached-job'
-  const file = path.join(stateRoot, 'jobs', `${jobId}.json`)
-  fs.writeFileSync(file, JSON.stringify({ 'first.txt': makeState(4) }), 'utf8')
+  stateDb.setJobState(jobId, new Map([
+    ['first.txt', makeState(5)],
+  ]))
 
   const first = stateDb.getJobState(jobId)
-  fs.writeFileSync(file, JSON.stringify({ 'second.txt': makeState(5) }), 'utf8')
+  first.set('memory-only.txt', makeState(6))
   const second = stateDb.getJobState(jobId)
 
   assert.equal(first, second)
-  assert.equal(second.has('first.txt'), true)
-  assert.equal(second.has('second.txt'), false)
+  assert.equal(second.has('memory-only.txt'), true)
 })
 
-test('stateDb.clearJob removes the per-job file and clears cache', () => {
+test('stateDb.clearJob removes SQLite rows and prevents legacy fallback from restoring them', () => {
   const jobId = 'clear-job'
-  const file = path.join(stateRoot, 'jobs', `${jobId}.json`)
+  const jobsDir = path.join(stateRoot, 'jobs')
+  fs.mkdirSync(jobsDir, { recursive: true })
+  fs.writeFileSync(path.join(jobsDir, `${jobId}.json`), JSON.stringify({
+    'legacy-after-clear.txt': makeState(7),
+  }), 'utf8')
+
   stateDb.setJobState(jobId, new Map([
-    ['old.txt', makeState(6)],
+    ['current.txt', makeState(8)],
   ]))
-
   stateDb.clearJob(jobId)
-  fs.writeFileSync(file, JSON.stringify({ 'new.txt': makeState(7) }), 'utf8')
 
-  assert.equal(fs.existsSync(file), true)
-  assert.deepEqual([...stateDb.getJobState(jobId).keys()], ['new.txt'])
+  assert.deepEqual([...stateDb.getJobState(jobId).keys()], [])
 })
 
 function makeState(size) {
