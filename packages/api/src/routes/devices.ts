@@ -18,7 +18,7 @@ export function createDevicesRouter(): Router {
   })
 
   router.get('/', async (req, res) => {
-    res.json(await usersDb.listTokens(req.userId))
+    res.json(await usersDb.listTokens(req.userId, req.orgId))
   })
 
   router.post('/', createTokenRateLimit, async (req, res) => {
@@ -30,7 +30,7 @@ export function createDevicesRouter(): Router {
     const id    = uuid()
     const token = randomToken()
     const expiresAt = Date.now() + ttlDays * 24 * 60 * 60 * 1000
-    await usersDb.createToken(id, req.userId, name, hashToken(token), expiresAt)
+    await usersDb.createToken(id, req.userId, name, hashToken(token), expiresAt, undefined, req.orgId)
     auditRequest(req, 'agent_token.created', {
       targetType: 'agent_token',
       targetId:   id,
@@ -51,7 +51,7 @@ export function createDevicesRouter(): Router {
     const token = randomToken()
     const expiresAt = Date.now() + ttlDays * 24 * 60 * 60 * 1000
 
-    await usersDb.createToken(id, req.userId, existing.name, hashToken(token), expiresAt, existing.id)
+    await usersDb.createToken(id, req.userId, existing.name, hashToken(token), expiresAt, existing.id, req.orgId)
     await usersDb.revokeToken(existing.id, req.userId)
     auditRequest(req, 'agent_token.rotated', {
       targetType: 'agent_token',

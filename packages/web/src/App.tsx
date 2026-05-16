@@ -9,6 +9,7 @@ import Login from './routes/Login'
 import Download from './routes/Download'
 import Audit from './routes/Audit'
 import Endpoints from './routes/Endpoints'
+import OrgSettings from './routes/OrgSettings'
 
 const queryClient = new QueryClient()
 
@@ -29,6 +30,7 @@ export default function App() {
             <Route path="/devices" element={<RequireAuth><Devices /></RequireAuth>} />
             <Route path="/endpoints" element={<RequireAuth><Endpoints /></RequireAuth>} />
             <Route path="/audit" element={<RequireAuth><Audit /></RequireAuth>} />
+            <Route path="/org-settings" element={<RequireAuth><OrgSettings /></RequireAuth>} />
           </Routes>
         </BrowserRouter>
       </TooltipProvider>

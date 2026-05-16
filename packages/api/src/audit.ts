@@ -12,6 +12,7 @@ export function auditRequest(req: Request, action: string, options: {
 } = {}): void {
   void auditDb.record({
     userId:    options.userId ?? req.userId,
+    orgId:     req.orgId,
     action,
     actorType: options.actorType ?? 'user',
     actorId:   options.actorId ?? options.userId ?? req.userId,

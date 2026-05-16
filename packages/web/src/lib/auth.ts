@@ -1,4 +1,5 @@
-const TOKEN_KEY = 'sync_tool_token'
+const TOKEN_KEY  = 'sync_tool_token'
+const ORG_KEY    = 'sync_tool_org_id'
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
@@ -10,6 +11,18 @@ export function setToken(token: string): void {
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY)
+}
+
+export function getOrgId(): string | null {
+  return localStorage.getItem(ORG_KEY)
+}
+
+export function setOrgId(orgId: string): void {
+  localStorage.setItem(ORG_KEY, orgId)
+}
+
+export function clearOrgId(): void {
+  localStorage.removeItem(ORG_KEY)
 }
 
 export function isLoggedIn(): boolean {

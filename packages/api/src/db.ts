@@ -1,6 +1,6 @@
 import postgres from 'postgres'
 import { v4 as uuid } from 'uuid'
-import type { Job, Endpoint, SavedEndpointConfig, SyncResult, RollbackManifest, RollbackResult } from '@sync-tool/shared'
+import type { Job, Endpoint, SavedEndpointConfig, Organization, Membership, OrgRole, SyncResult, RollbackManifest, RollbackResult } from '@sync-tool/shared'
 
 // ── Connection ────────────────────────────────────────────────────────────────
 
@@ -74,6 +74,29 @@ export async function initDb(): Promise<void> {
   `
 
   await sql`
+    CREATE TABLE IF NOT EXISTS organizations (
+      id         TEXT   PRIMARY KEY,
+      name       TEXT   NOT NULL,
+      slug       TEXT   NOT NULL UNIQUE,
+      plan       TEXT   NOT NULL DEFAULT 'starter',
+      parent_id  TEXT   REFERENCES organizations(id) ON DELETE SET NULL,
+      created_at BIGINT NOT NULL
+    )
+  `
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS memberships (
+      id          TEXT   PRIMARY KEY,
+      user_id     TEXT   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      org_id      TEXT   NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      role        TEXT   NOT NULL DEFAULT 'member',
+      invited_by  TEXT,
+      created_at  BIGINT NOT NULL,
+      UNIQUE (user_id, org_id)
+    )
+  `
+
+  await sql`
     CREATE TABLE IF NOT EXISTS endpoints (
       id         TEXT   PRIMARY KEY,
       user_id    TEXT   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -137,12 +160,19 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE sync_log ADD COLUMN IF NOT EXISTS transport_mode TEXT`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS source_endpoint_id TEXT REFERENCES endpoints(id) ON DELETE SET NULL`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS destination_endpoint_id TEXT REFERENCES endpoints(id) ON DELETE SET NULL`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE`,
+    `ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE`,
+    `ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL`,
   ]) {
     await sql.unsafe(stmt)
   }
 
   await sql`CREATE INDEX IF NOT EXISTS audit_log_user_created_idx ON audit_log (user_id, created_at DESC)`
   await sql`CREATE INDEX IF NOT EXISTS agent_tokens_user_active_idx ON agent_tokens (user_id, revoked_at, expires_at)`
+
+  // One-time data migration: create personal orgs for users that have none
+  await migrateToOrgs()
 }
 
 // ── Row mappers ───────────────────────────────────────────────────────────────
@@ -159,6 +189,7 @@ function rowToJob(row: Record<string, unknown>): Job {
     reliability:         parseJson(row.reliability as string),
     sourceDeviceId:        (row.source_device_id as string) ?? undefined,
     destinationDeviceId:   (row.destination_device_id as string) ?? undefined,
+    orgId:                 (row.org_id as string) ?? undefined,
     sourceEndpointId:      (row.source_endpoint_id as string) ?? undefined,
     destinationEndpointId: (row.destination_endpoint_id as string) ?? undefined,
     watch:                 Boolean(row.watch),
@@ -207,20 +238,27 @@ export const usersDb = {
     return row ? { id: row.id, email: row.email, passwordHash: row.password_hash, createdAt: Number(row.created_at) } : undefined
   },
 
-  async createToken(id: string, userId: string, name: string, tokenHash: string, expiresAt: number | null, rotatedFrom?: string): Promise<void> {
+  async createToken(id: string, userId: string, name: string, tokenHash: string, expiresAt: number | null, rotatedFrom?: string, orgId?: string): Promise<void> {
     await sql`
-      INSERT INTO agent_tokens (id, user_id, name, token_hash, created_at, expires_at, rotated_from)
-      VALUES (${id}, ${userId}, ${name}, ${tokenHash}, ${Date.now()}, ${expiresAt}, ${rotatedFrom ?? null})
+      INSERT INTO agent_tokens (id, user_id, org_id, name, token_hash, created_at, expires_at, rotated_from)
+      VALUES (${id}, ${userId}, ${orgId ?? null}, ${name}, ${tokenHash}, ${Date.now()}, ${expiresAt}, ${rotatedFrom ?? null})
     `
   },
 
-  async listTokens(userId: string): Promise<Array<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number }>> {
-    const rows = await sql`
-      SELECT id, name, created_at, expires_at, last_used_at
-      FROM agent_tokens
-      WHERE user_id = ${userId} AND revoked_at IS NULL
-      ORDER BY created_at DESC
-    `
+  async listTokens(userId: string, orgId?: string): Promise<Array<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number }>> {
+    const rows = orgId
+      ? await sql`
+          SELECT id, name, created_at, expires_at, last_used_at
+          FROM agent_tokens
+          WHERE user_id = ${userId} AND org_id = ${orgId} AND revoked_at IS NULL
+          ORDER BY created_at DESC
+        `
+      : await sql`
+          SELECT id, name, created_at, expires_at, last_used_at
+          FROM agent_tokens
+          WHERE user_id = ${userId} AND revoked_at IS NULL
+          ORDER BY created_at DESC
+        `
     return rows.map((r) => ({
       id:         r.id,
       name:       r.name,
@@ -246,17 +284,17 @@ export const usersDb = {
     return row ? { id: row.id, name: row.name } : undefined
   },
 
-  async getUserIdByToken(tokenHash: string): Promise<string | undefined> {
+  async getUserIdByToken(tokenHash: string): Promise<{ userId: string; orgId: string | undefined } | undefined> {
     const now = Date.now()
     const [row] = await sql`
-      SELECT id, user_id, expires_at, revoked_at
+      SELECT id, user_id, org_id, expires_at, revoked_at
       FROM agent_tokens
       WHERE token_hash = ${tokenHash}
     `
     if (!row || row.revoked_at != null) return undefined
     if (row.expires_at != null && Number(row.expires_at) <= now) return undefined
     await sql`UPDATE agent_tokens SET last_used_at = ${now} WHERE id = ${row.id}`
-    return row?.user_id
+    return { userId: row.user_id as string, orgId: (row.org_id as string) ?? undefined }
   },
 }
 
@@ -265,6 +303,7 @@ export const usersDb = {
 export interface AuditEntry {
   id:         string
   userId?:    string
+  orgId?:     string
   action:     string
   actorType:  string
   actorId?:   string
@@ -280,6 +319,7 @@ function rowToAuditEntry(row: Record<string, unknown>): AuditEntry {
   return {
     id:         String(row.id),
     userId:     (row.user_id as string) ?? undefined,
+    orgId:      (row.org_id as string) ?? undefined,
     action:     row.action as string,
     actorType:  row.actor_type as string,
     actorId:    (row.actor_id as string) ?? undefined,
@@ -306,9 +346,9 @@ export const auditDb = {
   async record(entry: Omit<AuditEntry, 'id' | 'createdAt' | 'metadata'> & { metadata?: Record<string, unknown> }): Promise<void> {
     await sql`
       INSERT INTO audit_log
-        (user_id, action, actor_type, actor_id, ip, user_agent, target_type, target_id, metadata, created_at)
+        (user_id, org_id, action, actor_type, actor_id, ip, user_agent, target_type, target_id, metadata, created_at)
       VALUES
-        (${entry.userId ?? null}, ${entry.action}, ${entry.actorType}, ${entry.actorId ?? null},
+        (${entry.userId ?? null}, ${entry.orgId ?? null}, ${entry.action}, ${entry.actorType}, ${entry.actorId ?? null},
          ${entry.ip ?? null}, ${entry.userAgent ?? null}, ${entry.targetType ?? null}, ${entry.targetId ?? null},
          ${JSON.stringify(entry.metadata ?? {})}, ${Date.now()})
     `
@@ -319,6 +359,17 @@ export const auditDb = {
       SELECT id, user_id, action, actor_type, actor_id, ip, user_agent, target_type, target_id, metadata, created_at
       FROM audit_log
       WHERE user_id = ${userId}
+      ORDER BY created_at DESC
+      LIMIT ${Math.min(Math.max(limit, 1), 500)}
+    `
+    return rows.map(rowToAuditEntry)
+  },
+
+  async listForOrg(orgId: string, limit = 100): Promise<AuditEntry[]> {
+    const rows = await sql`
+      SELECT id, user_id, action, actor_type, actor_id, ip, user_agent, target_type, target_id, metadata, created_at
+      FROM audit_log
+      WHERE org_id = ${orgId}
       ORDER BY created_at DESC
       LIMIT ${Math.min(Math.max(limit, 1), 500)}
     `
@@ -339,6 +390,11 @@ export const jobsDb = {
     return rows.map(rowToJob)
   },
 
+  async listForOrg(orgId: string): Promise<Job[]> {
+    const rows = await sql`SELECT * FROM jobs WHERE org_id = ${orgId} ORDER BY created_at DESC`
+    return rows.map(rowToJob)
+  },
+
   async get(id: string): Promise<Job | undefined> {
     const [row] = await sql`SELECT * FROM jobs WHERE id = ${id}`
     return row ? rowToJob(row) : undefined
@@ -349,16 +405,16 @@ export const jobsDb = {
     return row?.user_id ?? undefined
   },
 
-  async create(job: Omit<Job, 'status' | 'createdAt' | 'updatedAt'>, userId: string): Promise<Job> {
+  async create(job: Omit<Job, 'status' | 'createdAt' | 'updatedAt'>, userId: string, orgId?: string): Promise<Job> {
     const now  = Date.now()
-    const full: Job = { ...job, status: 'idle', createdAt: now, updatedAt: now }
+    const full: Job = { ...job, orgId: orgId ?? job.orgId, status: 'idle', createdAt: now, updatedAt: now }
     await sql`
       INSERT INTO jobs
-        (id, user_id, name, source, destination, direction, transfer_mode, deletion_policy, reliability,
+        (id, user_id, org_id, name, source, destination, direction, transfer_mode, deletion_policy, reliability,
          source_device_id, destination_device_id, source_endpoint_id, destination_endpoint_id,
          watch, schedule, status, created_at, updated_at)
       VALUES
-        (${full.id}, ${userId}, ${full.name}, ${full.source}, ${full.destination},
+        (${full.id}, ${userId}, ${full.orgId ?? null}, ${full.name}, ${full.source}, ${full.destination},
          ${full.direction}, ${full.transferMode ?? 'auto'}, ${full.deletionPolicy ?? 'backup'}, ${JSON.stringify(full.reliability ?? {})},
          ${full.sourceDeviceId ?? null}, ${full.destinationDeviceId ?? null},
          ${full.sourceEndpointId ?? null}, ${full.destinationEndpointId ?? null},
@@ -432,29 +488,37 @@ function parseEndpointConfig(value: unknown): SavedEndpointConfig {
 }
 
 export const endpointsDb = {
-  async list(userId: string): Promise<Endpoint[]> {
-    const rows = await sql`SELECT * FROM endpoints WHERE user_id = ${userId} ORDER BY created_at DESC`
+  /** List endpoints visible to an org (falls back to user-scoped if orgId absent). */
+  async list(userId: string, orgId?: string): Promise<Endpoint[]> {
+    const rows = orgId
+      ? await sql`SELECT * FROM endpoints WHERE org_id = ${orgId} ORDER BY created_at DESC`
+      : await sql`SELECT * FROM endpoints WHERE user_id = ${userId} ORDER BY created_at DESC`
     return rows.map(rowToEndpoint)
   },
 
-  async get(id: string, userId: string): Promise<Endpoint | undefined> {
-    const [row] = await sql`SELECT * FROM endpoints WHERE id = ${id} AND user_id = ${userId}`
+  async get(id: string, userId: string, orgId?: string): Promise<Endpoint | undefined> {
+    const [row] = orgId
+      ? await sql`SELECT * FROM endpoints WHERE id = ${id} AND org_id = ${orgId}`
+      : await sql`SELECT * FROM endpoints WHERE id = ${id} AND user_id = ${userId}`
     return row ? rowToEndpoint(row) : undefined
   },
 
-  async create(userId: string, ep: Omit<Endpoint, 'createdAt' | 'updatedAt'>): Promise<Endpoint> {
+  async create(userId: string, ep: Omit<Endpoint, 'createdAt' | 'updatedAt'>, orgId?: string): Promise<Endpoint> {
     const now = Date.now()
     await sql`
-      INSERT INTO endpoints (id, user_id, name, type, config, device_id, created_at, updated_at)
-      VALUES (${ep.id}, ${userId}, ${ep.name}, ${ep.type}, ${JSON.stringify(ep.config)}, ${ep.deviceId ?? null}, ${now}, ${now})
+      INSERT INTO endpoints (id, user_id, org_id, name, type, config, device_id, created_at, updated_at)
+      VALUES (${ep.id}, ${userId}, ${orgId ?? null}, ${ep.name}, ${ep.type}, ${JSON.stringify(ep.config)}, ${ep.deviceId ?? null}, ${now}, ${now})
     `
     return { ...ep, createdAt: now, updatedAt: now }
   },
 
-  async update(id: string, userId: string, patch: Partial<Pick<Endpoint, 'name' | 'type' | 'config' | 'deviceId'>>): Promise<Endpoint | undefined> {
-    const existing = await endpointsDb.get(id, userId)
+  async update(id: string, userId: string, patch: Partial<Pick<Endpoint, 'name' | 'type' | 'config' | 'deviceId'>>, orgId?: string): Promise<Endpoint | undefined> {
+    const existing = await endpointsDb.get(id, userId, orgId)
     if (!existing) return undefined
     const updated: Endpoint = { ...existing, ...patch, updatedAt: Date.now() }
+    const clause = orgId
+      ? sql`WHERE id = ${id} AND org_id = ${orgId}`
+      : sql`WHERE id = ${id} AND user_id = ${userId}`
     await sql`
       UPDATE endpoints SET
         name      = ${updated.name},
@@ -462,13 +526,15 @@ export const endpointsDb = {
         config    = ${JSON.stringify(updated.config)},
         device_id = ${updated.deviceId ?? null},
         updated_at = ${updated.updatedAt}
-      WHERE id = ${id} AND user_id = ${userId}
+      ${clause}
     `
     return updated
   },
 
-  async delete(id: string, userId: string): Promise<boolean> {
-    const result = await sql`DELETE FROM endpoints WHERE id = ${id} AND user_id = ${userId}`
+  async delete(id: string, userId: string, orgId?: string): Promise<boolean> {
+    const result = orgId
+      ? await sql`DELETE FROM endpoints WHERE id = ${id} AND org_id = ${orgId}`
+      : await sql`DELETE FROM endpoints WHERE id = ${id} AND user_id = ${userId}`
     return result.count > 0
   },
 
@@ -652,4 +718,189 @@ export const logDb = {
     `
     return parseInt(id)
   },
+}
+
+// ── Organizations ─────────────────────────────────────────────────────────────
+
+function rowToOrg(row: Record<string, unknown>): Organization {
+  return {
+    id:        row.id as string,
+    name:      row.name as string,
+    slug:      row.slug as string,
+    plan:      (row.plan as Organization['plan']) ?? 'starter',
+    parentId:  (row.parent_id as string) ?? undefined,
+    createdAt: Number(row.created_at),
+  }
+}
+
+export const orgsDb = {
+  async list(userId: string): Promise<Organization[]> {
+    const rows = await sql`
+      SELECT o.* FROM organizations o
+      JOIN memberships m ON m.org_id = o.id
+      WHERE m.user_id = ${userId}
+      ORDER BY o.created_at ASC
+    `
+    return rows.map(rowToOrg)
+  },
+
+  async get(id: string): Promise<Organization | undefined> {
+    const [row] = await sql`SELECT * FROM organizations WHERE id = ${id}`
+    return row ? rowToOrg(row) : undefined
+  },
+
+  async getBySlug(slug: string): Promise<Organization | undefined> {
+    const [row] = await sql`SELECT * FROM organizations WHERE slug = ${slug}`
+    return row ? rowToOrg(row) : undefined
+  },
+
+  async create(data: { name: string; slug: string; plan?: Organization['plan']; parentId?: string }): Promise<Organization> {
+    const now = Date.now()
+    const id  = uuid()
+    await sql`
+      INSERT INTO organizations (id, name, slug, plan, parent_id, created_at)
+      VALUES (${id}, ${data.name}, ${data.slug}, ${data.plan ?? 'starter'}, ${data.parentId ?? null}, ${now})
+    `
+    return { id, name: data.name, slug: data.slug, plan: data.plan ?? 'starter', parentId: data.parentId, createdAt: now }
+  },
+
+  async update(id: string, patch: Partial<Pick<Organization, 'name' | 'plan' | 'parentId'>>): Promise<Organization | undefined> {
+    const existing = await orgsDb.get(id)
+    if (!existing) return undefined
+    const updated: Organization = { ...existing, ...patch }
+    await sql`
+      UPDATE organizations SET
+        name      = ${updated.name},
+        plan      = ${updated.plan},
+        parent_id = ${updated.parentId ?? null}
+      WHERE id = ${id}
+    `
+    return updated
+  },
+
+  async delete(id: string): Promise<boolean> {
+    const result = await sql`DELETE FROM organizations WHERE id = ${id}`
+    return result.count > 0
+  },
+
+  /** Ensure personal org exists for user; returns its id. */
+  async ensurePersonalOrg(userId: string, email: string): Promise<string> {
+    const [existing] = await sql`
+      SELECT o.id FROM organizations o
+      JOIN memberships m ON m.org_id = o.id
+      WHERE m.user_id = ${userId}
+      LIMIT 1
+    `
+    if (existing) return existing.id as string
+
+    const slug  = `personal-${userId.slice(0, 8)}`
+    const orgId = uuid()
+    const memId = uuid()
+    const now   = Date.now()
+    // Use a unique email prefix for the org name
+    const label = email.split('@')[0] ?? 'My'
+    await sql`
+      INSERT INTO organizations (id, name, slug, plan, created_at)
+      VALUES (${orgId}, ${`${label}'s Org`}, ${slug}, 'starter', ${now})
+      ON CONFLICT (slug) DO NOTHING
+    `
+    // Re-select in case of conflict
+    const [org] = await sql`SELECT id FROM organizations WHERE slug = ${slug}`
+    const resolvedOrgId = (org?.id as string) ?? orgId
+    await sql`
+      INSERT INTO memberships (id, user_id, org_id, role, created_at)
+      VALUES (${memId}, ${userId}, ${resolvedOrgId}, 'owner', ${now})
+      ON CONFLICT (user_id, org_id) DO NOTHING
+    `
+    return resolvedOrgId
+  },
+}
+
+// ── Memberships ───────────────────────────────────────────────────────────────
+
+function rowToMembership(row: Record<string, unknown>): Membership {
+  return {
+    id:        row.id as string,
+    userId:    row.user_id as string,
+    orgId:     row.org_id as string,
+    role:      (row.role as OrgRole) ?? 'member',
+    invitedBy: (row.invited_by as string) ?? undefined,
+    createdAt: Number(row.created_at),
+  }
+}
+
+export interface MembershipWithEmail extends Membership {
+  email: string
+}
+
+export const membershipsDb = {
+  /** All orgs a user belongs to (already handled via orgsDb.list — this is for raw membership rows). */
+  async listForUser(userId: string): Promise<Membership[]> {
+    const rows = await sql`SELECT * FROM memberships WHERE user_id = ${userId} ORDER BY created_at ASC`
+    return rows.map(rowToMembership)
+  },
+
+  /** All members of an org, joined with their email. */
+  async listForOrg(orgId: string): Promise<MembershipWithEmail[]> {
+    const rows = await sql`
+      SELECT m.*, u.email
+      FROM memberships m
+      JOIN users u ON u.id = m.user_id
+      WHERE m.org_id = ${orgId}
+      ORDER BY m.created_at ASC
+    `
+    return rows.map(r => ({ ...rowToMembership(r), email: r.email as string }))
+  },
+
+  async get(userId: string, orgId: string): Promise<Membership | undefined> {
+    const [row] = await sql`SELECT * FROM memberships WHERE user_id = ${userId} AND org_id = ${orgId}`
+    return row ? rowToMembership(row) : undefined
+  },
+
+  async getRole(userId: string, orgId: string): Promise<OrgRole | undefined> {
+    const mem = await membershipsDb.get(userId, orgId)
+    return mem?.role
+  },
+
+  async add(userId: string, orgId: string, role: OrgRole, invitedBy?: string): Promise<Membership> {
+    const id  = uuid()
+    const now = Date.now()
+    await sql`
+      INSERT INTO memberships (id, user_id, org_id, role, invited_by, created_at)
+      VALUES (${id}, ${userId}, ${orgId}, ${role}, ${invitedBy ?? null}, ${now})
+      ON CONFLICT (user_id, org_id) DO UPDATE SET role = ${role}
+    `
+    return { id, userId, orgId, role, invitedBy, createdAt: now }
+  },
+
+  async updateRole(userId: string, orgId: string, role: OrgRole): Promise<boolean> {
+    const result = await sql`
+      UPDATE memberships SET role = ${role} WHERE user_id = ${userId} AND org_id = ${orgId}
+    `
+    return result.count > 0
+  },
+
+  async remove(userId: string, orgId: string): Promise<boolean> {
+    const result = await sql`DELETE FROM memberships WHERE user_id = ${userId} AND org_id = ${orgId}`
+    return result.count > 0
+  },
+}
+
+// ── One-time org migration ────────────────────────────────────────────────────
+
+/** For every user who has no org membership, create a personal org and migrate their data. */
+async function migrateToOrgs(): Promise<void> {
+  const users = await sql<Array<{ id: string; email: string }>>`
+    SELECT u.id, u.email
+    FROM users u
+    LEFT JOIN memberships m ON m.user_id = u.id
+    WHERE m.id IS NULL
+  `
+  for (const user of users) {
+    const orgId = await orgsDb.ensurePersonalOrg(user.id, user.email)
+    await sql`UPDATE jobs          SET org_id = ${orgId} WHERE user_id = ${user.id} AND org_id IS NULL`
+    await sql`UPDATE endpoints     SET org_id = ${orgId} WHERE user_id = ${user.id} AND org_id IS NULL`
+    await sql`UPDATE agent_tokens  SET org_id = ${orgId} WHERE user_id = ${user.id} AND org_id IS NULL`
+    await sql`UPDATE audit_log     SET org_id = ${orgId} WHERE user_id = ${user.id} AND org_id IS NULL`
+  }
 }

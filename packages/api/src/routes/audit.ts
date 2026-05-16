@@ -8,7 +8,7 @@ export function createAuditRouter(): ExpressRouter {
 
   router.get('/', async (req, res) => {
     const limit = parseInt(req.query.limit as string) || 100
-    res.json(await auditDb.listForUser(req.userId, limit))
+    res.json(await auditDb.listForOrg(req.orgId, limit))
   })
 
   return router

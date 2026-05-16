@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { login, register } from '@/lib/api'
-import { setToken } from '@/lib/auth'
+import { setToken, setOrgId } from '@/lib/auth'
 import { reconnectWs } from '@/lib/ws'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,8 +21,9 @@ export default function Login() {
     setLoading(true)
     try {
       const fn = mode === 'login' ? login : register
-      const { token } = await fn(email, password)
+      const { token, orgId } = await fn(email, password)
       setToken(token)
+      if (orgId) setOrgId(orgId)
       reconnectWs()
       navigate('/')
     } catch (err) {

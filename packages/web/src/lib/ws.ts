@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { ServerToBrowser, SyncProgress } from '../types'
-import { getToken } from './auth'
+import { getToken, getOrgId } from './auth'
 
 const WS_BASE = (import.meta.env.VITE_WS_URL as string | undefined) ?? 'ws://localhost:3001'
 
@@ -17,7 +17,9 @@ function connect() {
   const token = getToken()
   if (!token) return  // Don't connect if not logged in
 
-  ws = new WebSocket(WS_BASE, [`auth.${base64Url(token)}`])
+  const orgId  = getOrgId()
+  const wsUrl  = orgId ? `${WS_BASE}?org=${encodeURIComponent(orgId)}` : WS_BASE
+  ws = new WebSocket(wsUrl, [`auth.${base64Url(token)}`])
 
   ws.onmessage = (event: MessageEvent) => {
     try {

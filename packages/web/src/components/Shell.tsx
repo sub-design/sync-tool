@@ -1,7 +1,9 @@
 import { NavLink } from 'react-router-dom'
-import { Server } from 'lucide-react'
+import { Server, Settings2 } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useWsStore } from '@/lib/ws'
+import { orgsApi } from '@/lib/orgs'
 
 interface ShellProps {
   children: React.ReactNode
@@ -12,11 +14,24 @@ export default function Shell({ children }: ShellProps) {
   const agentCount   = agentsOnline.size
   const hostnames    = [...agentsOnline.values()]
 
+  const { data: org } = useQuery({
+    queryKey: ['org-current'],
+    queryFn:  orgsApi.getCurrent,
+    staleTime: 60_000,
+  })
+
   return (
     <div className="min-h-screen flex flex-col">
       <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-6 py-3">
         <div className="flex items-center gap-6">
-          <span style={{ fontSize: 16, fontWeight: 500 }}>SyncTool</span>
+          <div className="flex items-center gap-2">
+            <span style={{ fontSize: 16, fontWeight: 500 }}>SyncTool</span>
+            {org && (
+              <span className="text-xs text-muted-foreground border rounded px-1.5 py-0.5 leading-none">
+                {org.name}
+              </span>
+            )}
+          </div>
           <nav className="flex gap-4 text-sm">
             <NavLink
               to="/"
@@ -61,6 +76,17 @@ export default function Shell({ children }: ShellProps) {
               }
             >
               Download
+            </NavLink>
+            <NavLink
+              to="/org-settings"
+              className={({ isActive }) =>
+                isActive ? 'font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+              }
+            >
+              <span className="flex items-center gap-1">
+                <Settings2 size={13} />
+                Team
+              </span>
             </NavLink>
           </nav>
         </div>

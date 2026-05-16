@@ -1,3 +1,28 @@
+// ─── Organizations ─────────────────────────────────────────────────────────────
+
+export type OrgRole = 'owner' | 'admin' | 'member' | 'viewer'
+export type OrgPlan = 'starter' | 'pro' | 'enterprise'
+
+export interface Organization {
+  id:        string
+  name:      string
+  slug:      string
+  plan:      OrgPlan
+  parentId?: string
+  createdAt: number
+}
+
+export interface Membership {
+  id:        string
+  userId:    string
+  orgId:     string
+  role:      OrgRole
+  invitedBy?: string
+  createdAt: number
+}
+
+// ─── Directories ────────────────────────────────────────────────────────────────
+
 export interface DirEntry {
   name:        string
   type:        'file' | 'directory'

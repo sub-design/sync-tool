@@ -1,4 +1,29 @@
 // ─────────────────────────────────────────────
+//  Organization / Multi-tenancy types
+// ─────────────────────────────────────────────
+
+export type OrgRole = 'owner' | 'admin' | 'member' | 'viewer'
+export type OrgPlan = 'starter' | 'pro' | 'enterprise'
+
+export interface Organization {
+  id:        string
+  name:      string
+  slug:      string
+  plan:      OrgPlan
+  parentId?: string   // MSP → client hierarchy
+  createdAt: number
+}
+
+export interface Membership {
+  id:          string
+  userId:      string
+  orgId:       string
+  role:        OrgRole
+  invitedBy?:  string
+  createdAt:   number
+}
+
+// ─────────────────────────────────────────────
 //  Endpoint types
 // ─────────────────────────────────────────────
 
@@ -60,6 +85,7 @@ export interface JobReliability {
 
 export interface Job {
   id:          string
+  orgId?:      string   // set by API server; agents can ignore
   name:        string
   source:      string
   destination: string

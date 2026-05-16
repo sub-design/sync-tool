@@ -1,13 +1,15 @@
 import type { Job, DirEntry, AgentToken, AuditEntry } from '../types'
-import { getToken, clearToken } from './auth'
+import { getToken, clearToken, getOrgId } from './auth'
 
 const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001'
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken()
+  const orgId = getOrgId()
   const headers: Record<string, string> = {
     ...(init?.headers as Record<string, string>),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(orgId ? { 'X-Org-Id': orgId } : {}),
   }
 
   const res = await fetch(`${BASE_URL}${path}`, { ...init, headers })
@@ -23,7 +25,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   return res.json() as Promise<T>
 }
 
-export function login(email: string, password: string): Promise<{ token: string; user: { id: string; email: string } }> {
+export function login(email: string, password: string): Promise<{ token: string; orgId: string; user: { id: string; email: string } }> {
   return apiFetch('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -31,7 +33,7 @@ export function login(email: string, password: string): Promise<{ token: string;
   })
 }
 
-export function register(email: string, password: string): Promise<{ token: string; user: { id: string; email: string } }> {
+export function register(email: string, password: string): Promise<{ token: string; orgId: string; user: { id: string; email: string } }> {
   return apiFetch('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

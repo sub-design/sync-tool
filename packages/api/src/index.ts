@@ -9,6 +9,7 @@ import { createAuthRouter } from './routes/auth'
 import { createDevicesRouter } from './routes/devices'
 import { createAuditRouter } from './routes/audit'
 import { createEndpointsRouter } from './routes/endpoints'
+import { createOrgsRouter } from './routes/orgs'
 import { authFromWsRequest, requireAuth } from './middleware/requireAuth'
 import { hitRateLimit } from './rateLimit'
 import { auditRequest, auditSystem } from './audit'
@@ -63,8 +64,8 @@ server.on('upgrade', (req, socket, head) => {
     return
   }
 
-  authFromWsRequest(req).then((userId) => {
-    if (!userId) {
+  authFromWsRequest(req).then((auth) => {
+    if (!auth) {
       auditSystem('ws.auth_failed', {
         actorType: 'anonymous',
         ip:        wsRateLimitAddress(req),
@@ -76,9 +77,9 @@ server.on('upgrade', (req, socket, head) => {
       return
     }
     if (req.url?.startsWith('/agent')) {
-      agentWss.handleUpgrade(req, socket, head, (ws) => agentWss.emit('connection', ws, req, userId))
+      agentWss.handleUpgrade(req, socket, head, (ws) => agentWss.emit('connection', ws, req, auth))
     } else {
-      browserWss.handleUpgrade(req, socket, head, (ws) => browserWss.emit('connection', ws, req, userId))
+      browserWss.handleUpgrade(req, socket, head, (ws) => browserWss.emit('connection', ws, req, auth))
     }
   }).catch(() => {
     socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n')
@@ -124,7 +125,7 @@ function wsRateLimitAddress(req: http.IncomingMessage): string {
 // ── Agent registry ────────────────────────────────────────────────────────────
 
 interface AgentConn {
-  ws: WebSocket; userId: string; deviceId: string; hostname: string; platform: string
+  ws: WebSocket; userId: string; orgId?: string; deviceId: string; hostname: string; platform: string
 }
 
 const agents = new Map<string, AgentConn>()
@@ -187,7 +188,10 @@ function broadcastJobCancel(jobId: string) {
 
 async function sendWatchConfig(conn: AgentConn): Promise<void> {
   if (conn.ws.readyState !== WebSocket.OPEN) return
-  const jobs = (await jobsDb.listForUser(conn.userId)).filter((j) => j.watch)
+  const all  = conn.orgId
+    ? await jobsDb.listForOrg(conn.orgId)
+    : await jobsDb.listForUser(conn.userId)
+  const jobs = all.filter((j) => j.watch)
   conn.ws.send(JSON.stringify({ type: 'jobs:watch', jobs } satisfies ServerToAgent))
 }
 
@@ -209,7 +213,8 @@ function broadcastToBrowsers(msg: ServerToBrowser, userId?: string) {
 
 // ── Agent WebSocket ───────────────────────────────────────────────────────────
 
-agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: string) => {
+agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { userId: string; orgId?: string }) => {
+  const { userId, orgId } = auth
   let deviceId = ''
 
   ws.on('message', async (raw) => {
@@ -219,7 +224,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: st
     switch (msg.type) {
       case 'register': {
         deviceId = msg.deviceId
-        agents.set(deviceId, { ws, userId, deviceId, hostname: msg.hostname, platform: msg.platform })
+        agents.set(deviceId, { ws, userId, orgId, deviceId, hostname: msg.hostname, platform: msg.platform })
         ws.send(JSON.stringify({ type: 'registered', ok: true } satisfies ServerToAgent))
         broadcastToBrowsers({ type: 'agent:online', deviceId, hostname: msg.hostname }, userId)
         auditSystem('agent.connected', {
@@ -228,11 +233,12 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: st
           actorId:    deviceId,
           targetType: 'device',
           targetId:   deviceId,
-          metadata:   { hostname: msg.hostname, platform: msg.platform },
+          metadata:   { hostname: msg.hostname, platform: msg.platform, orgId },
         })
         console.log(`[api] Agent registered: ${msg.hostname} (${deviceId})`)
         await sendWatchConfig(agents.get(deviceId)!)
-        const queued = (await jobsDb.listForUser(userId)).filter((j) => j.status === 'queued')
+        const all    = orgId ? await jobsDb.listForOrg(orgId) : await jobsDb.listForUser(userId)
+        const queued = all.filter((j) => j.status === 'queued')
         for (const job of queued) ws.send(JSON.stringify({ type: 'job:run', job } satisfies ServerToAgent))
         break
       }
@@ -367,7 +373,8 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, userId: st
 
 // ── Browser WebSocket ─────────────────────────────────────────────────────────
 
-browserWss.on('connection', async (ws: WebSocket, _req: http.IncomingMessage, userId: string) => {
+browserWss.on('connection', async (ws: WebSocket, _req: http.IncomingMessage, auth: { userId: string; orgId?: string }) => {
+  const { userId } = auth
   browserConnections.set(ws, userId)
   for (const [, conn] of agents) {
     if (conn.userId !== userId) continue
@@ -389,6 +396,7 @@ async function checkScheduledJobs(): Promise<void> {
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 app.use('/api/auth',      createAuthRouter())
+app.use('/api/orgs',      createOrgsRouter())
 app.use('/api/devices',   createDevicesRouter())
 app.use('/api/audit',     createAuditRouter())
 app.use('/api/endpoints', createEndpointsRouter())

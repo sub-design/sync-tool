@@ -13,17 +13,18 @@ async function resolveEndpoints(
   destination: string,
   sourceEndpointId?: string,
   destinationEndpointId?: string,
+  orgId?: string,
 ): Promise<{ source: string; destination: string }> {
   let resolvedSource = source
   let resolvedDest   = destination
 
   if (sourceEndpointId) {
-    const ep = await endpointsDb.get(sourceEndpointId, userId)
+    const ep = await endpointsDb.get(sourceEndpointId, userId, orgId)
     if (!ep) throw Object.assign(new Error('Source endpoint not found'), { status: 400 })
     resolvedSource = buildEndpointUri(ep)
   }
   if (destinationEndpointId) {
-    const ep = await endpointsDb.get(destinationEndpointId, userId)
+    const ep = await endpointsDb.get(destinationEndpointId, userId, orgId)
     if (!ep) throw Object.assign(new Error('Destination endpoint not found'), { status: 400 })
     resolvedDest = buildEndpointUri(ep)
   }
@@ -32,11 +33,12 @@ async function resolveEndpoints(
 }
 
 /** Return a job with endpoint URIs resolved fresh from the DB (used at run time). */
-async function withResolvedEndpoints(job: Job, userId: string): Promise<Job> {
+async function withResolvedEndpoints(job: Job, userId: string, orgId?: string): Promise<Job> {
   if (!job.sourceEndpointId && !job.destinationEndpointId) return job
   const { source, destination } = await resolveEndpoints(
     userId, job.source, job.destination,
     job.sourceEndpointId, job.destinationEndpointId,
+    orgId,
   )
   return { ...job, source, destination }
 }
@@ -51,12 +53,12 @@ export function createJobsRouter(
   router.use(requireAuth)
 
   router.get('/', async (req, res) => {
-    res.json(await jobsDb.listForUser(req.userId))
+    res.json(await jobsDb.listForOrg(req.orgId))
   })
 
   router.get('/:id', async (req, res) => {
     const job = await jobsDb.get(req.params.id)
-    if (!job || (await jobsDb.getUserId(req.params.id)) !== req.userId) {
+    if (!job || job.orgId !== req.orgId) {
       res.status(404).json({ error: 'Job not found' }); return
     }
     res.json(job)
@@ -78,7 +80,7 @@ export function createJobsRouter(
     }
     let resolved: { source: string; destination: string }
     try {
-      resolved = await resolveEndpoints(req.userId, source, destination, sourceEndpointId, destinationEndpointId)
+      resolved = await resolveEndpoints(req.userId, source, destination, sourceEndpointId, destinationEndpointId, req.orgId)
     } catch (err: unknown) {
       res.status((err as { status?: number }).status ?? 400).json({ error: (err as Error).message }); return
     }
@@ -93,6 +95,7 @@ export function createJobsRouter(
         watch: Boolean(watch), schedule,
       },
       req.userId,
+      req.orgId,
     )
     onJobsChanged()
     auditRequest(req, 'job.created', {
@@ -104,14 +107,14 @@ export function createJobsRouter(
   })
 
   router.patch('/:id', async (req, res) => {
-    if ((await jobsDb.getUserId(req.params.id)) !== req.userId) {
+    const existing0 = await jobsDb.get(req.params.id)
+    if (!existing0 || existing0.orgId !== req.orgId) {
       res.status(404).json({ error: 'Job not found' }); return
     }
     const patch = { ...req.body }
     // Re-resolve endpoints if they changed
     if (patch.sourceEndpointId !== undefined || patch.destinationEndpointId !== undefined || patch.source !== undefined || patch.destination !== undefined) {
-      const existing = await jobsDb.get(req.params.id)
-      if (!existing) { res.status(404).json({ error: 'Job not found' }); return }
+      const existing = existing0
       try {
         const resolved = await resolveEndpoints(
           req.userId,
@@ -119,6 +122,7 @@ export function createJobsRouter(
           patch.destination ?? existing.destination,
           patch.sourceEndpointId      !== undefined ? patch.sourceEndpointId      : existing.sourceEndpointId,
           patch.destinationEndpointId !== undefined ? patch.destinationEndpointId : existing.destinationEndpointId,
+          req.orgId,
         )
         patch.source      = resolved.source
         patch.destination = resolved.destination
@@ -138,7 +142,8 @@ export function createJobsRouter(
   })
 
   router.delete('/:id', async (req, res) => {
-    if ((await jobsDb.getUserId(req.params.id)) !== req.userId) {
+    const jobToDel = await jobsDb.get(req.params.id)
+    if (!jobToDel || jobToDel.orgId !== req.orgId) {
       res.status(404).json({ error: 'Job not found' }); return
     }
     const ok = await jobsDb.delete(req.params.id)
@@ -153,7 +158,7 @@ export function createJobsRouter(
 
   router.post('/:id/run', async (req, res) => {
     const job = await jobsDb.get(req.params.id)
-    if (!job || (await jobsDb.getUserId(req.params.id)) !== req.userId) {
+    if (!job || job.orgId !== req.orgId) {
       res.status(404).json({ error: 'Job not found' }); return
     }
     if (job.status === 'running' || job.status === 'queued') {
@@ -161,7 +166,7 @@ export function createJobsRouter(
     }
     // Re-resolve named endpoint configs at run time so changes to an endpoint
     // propagate to all jobs that reference it without requiring a job edit.
-    const resolvedJob = await withResolvedEndpoints(job, req.userId)
+    const resolvedJob = await withResolvedEndpoints(job, req.userId, req.orgId)
     broadcast({ type: 'job:run', job: resolvedJob })
     auditRequest(req, 'job.run_requested', {
       targetType: 'job',
@@ -173,7 +178,7 @@ export function createJobsRouter(
 
   router.post('/:id/cancel', async (req, res) => {
     const job = await jobsDb.get(req.params.id)
-    if (!job || (await jobsDb.getUserId(req.params.id)) !== req.userId) {
+    if (!job || job.orgId !== req.orgId) {
       res.status(404).json({ error: 'Job not found' }); return
     }
     if (job.status !== 'running' && job.status !== 'queued') {
@@ -189,7 +194,8 @@ export function createJobsRouter(
   })
 
   router.get('/:id/log', async (req, res) => {
-    if ((await jobsDb.getUserId(req.params.id)) !== req.userId) {
+    const jobLog = await jobsDb.get(req.params.id)
+    if (!jobLog || jobLog.orgId !== req.orgId) {
       res.status(404).json({ error: 'Job not found' }); return
     }
     const limit = parseInt(req.query.limit as string) || 20
@@ -199,7 +205,8 @@ export function createJobsRouter(
   // ── Rollback ──────────────────────────────────────────────────────────────────
 
   router.get('/:id/log/:logId/rollback', async (req, res) => {
-    if ((await jobsDb.getUserId(req.params.id)) !== req.userId) {
+    const jobRb = await jobsDb.get(req.params.id)
+    if (!jobRb || jobRb.orgId !== req.orgId) {
       res.status(404).json({ error: 'Job not found' }); return
     }
     const logId = parseInt(req.params.logId)
@@ -226,7 +233,7 @@ export function createJobsRouter(
 
   router.post('/:id/log/:logId/rollback', async (req, res) => {
     const job = await jobsDb.get(req.params.id)
-    if (!job || (await jobsDb.getUserId(req.params.id)) !== req.userId) {
+    if (!job || job.orgId !== req.orgId) {
       res.status(404).json({ error: 'Job not found' }); return
     }
     if (job.status === 'running' || job.status === 'queued') {

@@ -109,13 +109,13 @@ export function createEndpointsRouter(): Router {
 
   // GET /api/endpoints
   router.get('/', async (req, res) => {
-    const endpoints = await endpointsDb.list(req.userId)
+    const endpoints = await endpointsDb.list(req.userId, req.orgId)
     res.json(endpoints.map(maskEndpoint))
   })
 
   // GET /api/endpoints/:id
   router.get('/:id', async (req, res) => {
-    const ep = await endpointsDb.get(req.params.id, req.userId)
+    const ep = await endpointsDb.get(req.params.id, req.userId, req.orgId)
     if (!ep) { res.status(404).json({ error: 'Endpoint not found' }); return }
     res.json(maskEndpoint(ep))
   })
@@ -130,7 +130,7 @@ export function createEndpointsRouter(): Router {
     }
     const ep = await endpointsDb.create(req.userId, {
       id: uuid(), name: name.trim(), type, config, deviceId,
-    })
+    }, req.orgId)
     auditRequest(req, 'endpoint.created', {
       targetType: 'endpoint', targetId: ep.id, metadata: { name: ep.name, type: ep.type },
     })
@@ -139,7 +139,7 @@ export function createEndpointsRouter(): Router {
 
   // PATCH /api/endpoints/:id
   router.patch('/:id', async (req, res) => {
-    const existing = await endpointsDb.get(req.params.id, req.userId)
+    const existing = await endpointsDb.get(req.params.id, req.userId, req.orgId)
     if (!existing) { res.status(404).json({ error: 'Endpoint not found' }); return }
 
     const patch: Partial<Pick<Endpoint, 'name' | 'type' | 'config' | 'deviceId'>> = {}
@@ -164,7 +164,7 @@ export function createEndpointsRouter(): Router {
 
     if (req.body.deviceId !== undefined) patch.deviceId = req.body.deviceId || undefined
 
-    const updated = await endpointsDb.update(req.params.id, req.userId, patch)
+    const updated = await endpointsDb.update(req.params.id, req.userId, patch, req.orgId)
     if (!updated) { res.status(404).json({ error: 'Endpoint not found' }); return }
 
     auditRequest(req, 'endpoint.updated', {
@@ -176,7 +176,7 @@ export function createEndpointsRouter(): Router {
 
   // DELETE /api/endpoints/:id
   router.delete('/:id', async (req, res) => {
-    const ep = await endpointsDb.get(req.params.id, req.userId)
+    const ep = await endpointsDb.get(req.params.id, req.userId, req.orgId)
     if (!ep) { res.status(404).json({ error: 'Endpoint not found' }); return }
 
     const usedBy = await endpointsDb.findJobsUsing(req.params.id)
@@ -187,7 +187,7 @@ export function createEndpointsRouter(): Router {
       }); return
     }
 
-    await endpointsDb.delete(req.params.id, req.userId)
+    await endpointsDb.delete(req.params.id, req.userId, req.orgId)
     auditRequest(req, 'endpoint.deleted', {
       targetType: 'endpoint', targetId: req.params.id, metadata: { name: ep.name },
     })
