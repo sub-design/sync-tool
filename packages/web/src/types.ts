@@ -121,7 +121,7 @@ export interface Job {
   schedule?: string
   autoOptions?: JobAutoOptions
   status: JobStatus
-  lastRun?: number; lastError?: string; createdAt: number; updatedAt: number
+  lastRun?: number; nextRun?: number; lastError?: string; createdAt: number; updatedAt: number
 }
 
 export interface SyncProgress {

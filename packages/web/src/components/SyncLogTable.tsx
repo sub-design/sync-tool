@@ -1,5 +1,4 @@
-import { useState } from 'react'
-import { CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronRight, RotateCcw, Loader2, Ban } from 'lucide-react'
+import { CheckCircle2, XCircle, AlertCircle, ChevronRight, RotateCcw, Loader2, Ban } from 'lucide-react'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table'
@@ -36,6 +35,7 @@ interface SyncLogTableProps {
   entries:           SyncLogEntry[]
   onRollback?:       (entry: SyncLogEntry) => void
   rollbackingLogId?: string
+  onRowClick?:       (entry: SyncLogEntry) => void
 }
 
 function StatusIcon({ entry }: { entry: SyncLogEntry }) {
@@ -58,23 +58,13 @@ function StatusIcon({ entry }: { entry: SyncLogEntry }) {
   return <CheckCircle2 className="text-green-600" size={16} />
 }
 
-export default function SyncLogTable({ entries, onRollback, rollbackingLogId }: SyncLogTableProps) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
-
+export default function SyncLogTable({ entries, onRollback, rollbackingLogId, onRowClick }: SyncLogTableProps) {
   if (entries.length === 0) {
     return (
       <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
         No sync runs yet.
       </div>
     )
-  }
-
-  function toggle(id: string) {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) { next.delete(id) } else { next.add(id) }
-      return next
-    })
   }
 
   return (
@@ -95,38 +85,27 @@ export default function SyncLogTable({ entries, onRollback, rollbackingLogId }: 
       </TableHeader>
       <TableBody>
         {entries.map(entry => {
-          const fileErrors: string[] = (() => {
-            try { return entry.errors ? JSON.parse(entry.errors) : [] } catch { return [] }
-          })()
-
-          // Expandable if there's a fatal error message OR per-file errors
-          const expandContent = entry.error_message
-            ? [entry.error_message]
-            : fileErrors
-
-          const isExpandable = expandContent.length > 0
-          const isExpanded   = expanded.has(entry.id)
-          const duration     = entry.ended_at ? entry.ended_at - entry.started_at : null
-
+          const duration      = entry.ended_at ? entry.ended_at - entry.started_at : null
           const isRollbackRow = entry.is_rollback === true
-          const canRollback  = !isRollbackRow && entry.rollback_status === 'available' && !!onRollback
+          const canRollback   = !isRollbackRow && entry.rollback_status === 'available' && !!onRollback
           const isRollingBack = rollbackingLogId === entry.id
+          const hasErrors     = !!(entry.error_message || (entry.errors && entry.errors !== '[]'))
 
           return [
             <TableRow
               key={entry.id}
               className={[
-                isExpandable ? 'cursor-pointer select-none' : '',
+                onRowClick ? 'cursor-pointer' : '',
                 isRollbackRow ? 'bg-violet-50 dark:bg-violet-950/20' : '',
               ].filter(Boolean).join(' ')}
-              onClick={isExpandable && !isRollbackRow ? () => toggle(entry.id) : undefined}
+              onClick={onRowClick ? () => onRowClick(entry) : undefined}
             >
-              {/* Expand chevron */}
+              {/* Row type icon */}
               <TableCell className="pr-0 text-muted-foreground">
                 {isRollbackRow
                   ? <RotateCcw size={13} className="text-violet-500" />
-                  : isExpandable
-                    ? (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />)
+                  : hasErrors
+                    ? <ChevronRight size={14} className="text-muted-foreground/50" />
                     : null}
               </TableCell>
 
@@ -227,16 +206,6 @@ export default function SyncLogTable({ entries, onRollback, rollbackingLogId }: 
               </TableCell>
             </TableRow>,
 
-            /* Expandable error panel */
-            isExpanded && !isRollbackRow && (
-              <TableRow key={`${entry.id}-detail`} className="hover:bg-transparent">
-                <TableCell colSpan={10} className="pt-0 pb-2 px-4">
-                  <pre className="overflow-auto max-h-32 rounded-md bg-destructive/5 border border-destructive/20 px-3 py-2 font-mono text-xs text-destructive leading-relaxed whitespace-pre-wrap">
-                    {expandContent.join('\n')}
-                  </pre>
-                </TableCell>
-              </TableRow>
-            ),
           ]
         })}
       </TableBody>

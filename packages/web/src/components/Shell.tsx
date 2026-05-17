@@ -1,6 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
-  LayoutDashboard, HardDrive, Link2, BarChart3,
+  LayoutDashboard, Layers, HardDrive, Link2, BarChart3,
   FileText, Users, Settings, LogOut, Monitor, Sun, Moon, User,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
@@ -29,7 +29,8 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: 'Main',
     items: [
-      { to: '/',          label: 'Jobs',      icon: LayoutDashboard, end: true },
+      { to: '/',          label: 'Dashboard', icon: LayoutDashboard, end: true },
+      { to: '/jobs',      label: 'Jobs',      icon: Layers },
       { to: '/devices',   label: 'Devices',   icon: HardDrive },
       { to: '/endpoints', label: 'Endpoints', icon: Link2 },
     ],
