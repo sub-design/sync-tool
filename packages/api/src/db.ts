@@ -1178,9 +1178,12 @@ export const logDb = {
   async insertFiles(runId: number, files: SyncLogFile[]): Promise<void> {
     if (files.length === 0) return
     for (const f of files) {
+      const mtimeMs = typeof f.mtime_ms === 'number' && Number.isFinite(f.mtime_ms)
+        ? Math.round(f.mtime_ms)
+        : null
       await sql`
         INSERT INTO sync_log_files (run_id, relative_path, is_directory, action, size, mtime_ms, error_msg)
-        VALUES (${runId}, ${f.relative_path}, ${f.is_directory}, ${f.action}, ${f.size ?? null}, ${f.mtime_ms ?? null}, ${f.error_msg ?? null})
+        VALUES (${runId}, ${f.relative_path}, ${f.is_directory}, ${f.action}, ${f.size ?? null}, ${mtimeMs}, ${f.error_msg ?? null})
       `
     }
   },

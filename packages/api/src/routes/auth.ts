@@ -17,7 +17,7 @@ export function createAuthRouter(): Router {
   // POST /api/auth/register — open only when no users exist
   router.post('/register', authRateLimit, async (req, res) => {
     try {
-      if (await usersDb.count() > 0) {
+      if (process.env.ALLOW_OPEN_REGISTRATION !== 'true' && await usersDb.count() > 0) {
         res.status(403).json({ error: 'Registration is closed' })
         return
       }

@@ -125,6 +125,10 @@ function wsRateLimitAddress(req: http.IncomingMessage): string {
   return (firstForwarded || req.socket.remoteAddress || 'unknown').trim()
 }
 
+function toIntegerMs(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null
+}
+
 // ── Agent registry ────────────────────────────────────────────────────────────
 
 interface AgentConn {
@@ -262,7 +266,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
           is_directory:  msg.file.isDirectory,
           action:        msg.file.action,
           size:          msg.file.size,
-          mtime_ms:      msg.file.mtimeMs,
+          mtime_ms:      toIntegerMs(msg.file.mtimeMs),
           error_msg:     msg.file.errorMsg ?? null,
         })
         inFlightFiles.set(msg.jobId, buf)
