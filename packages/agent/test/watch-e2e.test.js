@@ -137,8 +137,7 @@ test('scheduled job auto-runs through API scheduler and agent', { timeout: 20_00
       }
     }, 'scheduled file sync')
 
-    const finalJob = await getJson(`http://127.0.0.1:${port}/api/jobs/${job.id}`, auth.jwt)
-    assert.equal(finalJob.status, 'completed')
+    await waitFor(async () => (await getJson(`http://127.0.0.1:${port}/api/jobs/${job.id}`, auth.jwt)).status === 'completed', 'scheduled job completion')
   } finally {
     await Promise.all(processes.reverse().map((child) => stopProcess(child)))
     await fs.rm(root, { recursive: true, force: true })
@@ -297,6 +296,7 @@ async function withRemoteAgents(suffix, scenario) {
       DEVICE_ID: 'remote-source-agent',
       STATE_DIR: path.join(root, 'source-agent-state'),
       SYNC_ALLOWED_ROOTS: root,
+      LAN_DISCOVERY_ENABLED: 'false',
     })
     const destinationAgent = startProcess('destination-agent', ['packages/agent/dist/index.js'], {
       API_URL: `ws://127.0.0.1:${apiPort}/agent`,
@@ -305,19 +305,24 @@ async function withRemoteAgents(suffix, scenario) {
       DEVICE_ID: 'remote-destination-agent',
       STATE_DIR: path.join(root, 'destination-agent-state'),
       SYNC_ALLOWED_ROOTS: root,
+      LAN_DISCOVERY_ENABLED: 'false',
     })
     processes.push(sourceAgent, destinationAgent)
 
-    await waitFor(async () => {
-      const health = await getJson(`http://127.0.0.1:${apiPort}/api/health`)
-      return health.agents?.some((entry) => entry.deviceId === 'remote-source-agent')
-        && health.agents?.some((entry) => entry.deviceId === 'remote-destination-agent')
-    }, 'agent registration')
-    await waitFor(async () => {
-      const health = await getJson(`http://127.0.0.1:${relayPort}/health`)
-      return health.devices?.some((entry) => entry.deviceId === 'remote-source-agent')
-        && health.devices?.some((entry) => entry.deviceId === 'remote-destination-agent')
-    }, 'relay registration')
+    try {
+      await waitFor(async () => {
+        const health = await getJson(`http://127.0.0.1:${apiPort}/api/health`)
+        return health.agents?.some((entry) => entry.deviceId === 'remote-source-agent')
+          && health.agents?.some((entry) => entry.deviceId === 'remote-destination-agent')
+      }, 'agent registration')
+      await waitFor(async () => {
+        const health = await getJson(`http://127.0.0.1:${relayPort}/health`)
+        return health.devices?.some((entry) => entry.deviceId === 'remote-source-agent')
+          && health.devices?.some((entry) => entry.deviceId === 'remote-destination-agent')
+      }, 'relay registration')
+    } catch (err) {
+      throw new Error(`${err.message}\n\nAPI output:\n${api.output}\n\nRelay output:\n${relay.output}\n\nSource agent output:\n${sourceAgent.output}\n\nDestination agent output:\n${destinationAgent.output}`)
+    }
 
     await scenario({ apiPort, relayPort, auth, srcRoot, dstRoot, root })
   } finally {
