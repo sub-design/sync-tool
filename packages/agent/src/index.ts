@@ -6,6 +6,7 @@ import { WebSocket } from 'ws'
 import { v4 as uuid } from 'uuid'
 import pLimit from 'p-limit'
 import { runSync, performRollback } from './sync'
+import type { SyncFileEvent } from '@sync-tool/shared'
 import { resolveBackend } from './backends/resolve'
 import { assertAllowedLocalEndpoint, assertAllowedPath } from './fileGuard'
 import { RelayClient } from './relayClient'
@@ -173,7 +174,11 @@ async function executeJob(ws: WebSocket, job: Job) {
         }
       }
 
-    const result = await runJob(job, onProgress, controller.signal)
+    const onFileDone = (file: SyncFileEvent) => {
+      send(ws, { type: 'job:file:done', jobId: job.id, file })
+    }
+
+    const result = await runJob(job, onProgress, controller.signal, onFileDone)
 
     process.stdout.write('\n')
     console.log(`[agent] Job complete: ${result.filesCopied} copied, ${result.filesDeleted ?? 0} deleted, ${result.filesSkipped} skipped, ${result.filesErrored} errors`)
@@ -193,7 +198,7 @@ async function executeJob(ws: WebSocket, job: Job) {
   }
 }
 
-async function runJob(job: Job, onProgress: (progress: any) => void, signal: AbortSignal) {
+async function runJob(job: Job, onProgress: (progress: any) => void, signal: AbortSignal, onFileDone?: (file: SyncFileEvent) => void) {
   if (canRunRemoteDelta(job, DEVICE_ID, relay)) {
     return runRemoteDeltaSync(job, relay!, stateDb, onProgress, signal)
   }
@@ -202,10 +207,10 @@ async function runJob(job: Job, onProgress: (progress: any) => void, signal: Abo
     throw new Error('Remote delta job requires connected relay and matching source/destination device ids')
   }
 
-  return runLocalSync(job, onProgress, signal)
+  return runLocalSync(job, onProgress, signal, onFileDone)
 }
 
-async function runLocalSync(job: Job, onProgress: (progress: any) => void, signal: AbortSignal) {
+async function runLocalSync(job: Job, onProgress: (progress: any) => void, signal: AbortSignal, onFileDone?: (file: SyncFileEvent) => void) {
   await Promise.all([
     assertAllowedLocalEndpoint(job.source),
     assertAllowedLocalEndpoint(job.destination),
@@ -223,6 +228,7 @@ async function runLocalSync(job: Job, onProgress: (progress: any) => void, signa
     stateDb,
     onProgress,
     signal,
+    onFileDone,
   )
 }
 

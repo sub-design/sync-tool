@@ -132,6 +132,21 @@ export async function initDb(): Promise<void> {
     )
   `
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS sync_log_files (
+      id            BIGSERIAL PRIMARY KEY,
+      run_id        BIGINT NOT NULL REFERENCES sync_log(id) ON DELETE CASCADE,
+      relative_path TEXT   NOT NULL,
+      is_directory  BOOLEAN NOT NULL DEFAULT false,
+      action        TEXT   NOT NULL,
+      size          BIGINT,
+      mtime_ms      BIGINT,
+      error_msg     TEXT
+    )
+  `
+
+  await sql`CREATE INDEX IF NOT EXISTS idx_slf_run_id ON sync_log_files (run_id)`
+
   // Idempotent column additions (safe to run repeatedly)
   for (const stmt of [
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS transfer_mode TEXT DEFAULT 'auto'`,
@@ -611,6 +626,17 @@ function rowToLogEntry(row: Record<string, unknown>): SyncLogEntry {
   }
 }
 
+export interface SyncLogFile {
+  id?:           number
+  run_id:        number
+  relative_path: string
+  is_directory:  boolean
+  action:        'copied' | 'deleted' | 'skipped' | 'errored'
+  size:          number | null
+  mtime_ms:      number | null
+  error_msg:     string | null
+}
+
 export const logDb = {
   async create(jobId: string): Promise<number> {
     const [{ id }] = await sql<[{ id: string }]>`
@@ -726,6 +752,33 @@ export const logDb = {
       ) RETURNING id::text
     `
     return parseInt(id)
+  },
+
+  async insertFiles(runId: number, files: SyncLogFile[]): Promise<void> {
+    if (files.length === 0) return
+    for (const f of files) {
+      await sql`
+        INSERT INTO sync_log_files (run_id, relative_path, is_directory, action, size, mtime_ms, error_msg)
+        VALUES (${runId}, ${f.relative_path}, ${f.is_directory}, ${f.action}, ${f.size ?? null}, ${f.mtime_ms ?? null}, ${f.error_msg ?? null})
+      `
+    }
+  },
+
+  async getFiles(runId: number): Promise<SyncLogFile[]> {
+    const rows = await sql`
+      SELECT id, run_id, relative_path, is_directory, action, size, mtime_ms, error_msg
+      FROM sync_log_files WHERE run_id = ${runId} ORDER BY relative_path
+    `
+    return rows.map(r => ({
+      id:            Number(r.id),
+      run_id:        Number(r.run_id),
+      relative_path: r.relative_path as string,
+      is_directory:  Boolean(r.is_directory),
+      action:        r.action as SyncLogFile['action'],
+      size:          r.size != null ? Number(r.size) : null,
+      mtime_ms:      r.mtime_ms != null ? Number(r.mtime_ms) : null,
+      error_msg:     (r.error_msg as string) ?? null,
+    }))
   },
 }
 

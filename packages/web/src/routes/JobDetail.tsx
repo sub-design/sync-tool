@@ -27,6 +27,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import Shell from '@/components/Shell'
 import SyncLogTable, { type SyncLogEntry } from '@/components/SyncLogTable'
+import FileTree from '@/components/FileTree'
 import type { RollbackPreview } from '@/lib/api'
 import JobForm from '@/components/JobForm'
 import { useWsStore, subscribe } from '@/lib/ws'
@@ -193,8 +194,10 @@ export default function JobDetail() {
     setRollbackEntry(null); setRollbackPreview(null)
   }
 
+  const liveRunFiles = useWsStore(s => s.liveRunFiles)
   const isActive  = job?.status === 'running' || job?.status === 'queued'
   const progress  = id ? jobProgress.get(id) : undefined
+  const liveFiles = id ? (liveRunFiles.get(id) ?? []) : []
   const lastEntry = logData?.[0]
 
   const nextRun = job?.nextRun ?? (job?.schedule ? getNextCronRun(job.schedule) ?? undefined : undefined)
@@ -345,6 +348,11 @@ export default function JobDetail() {
                       </p>
                     </CardContent>
                   </Card>
+                )}
+
+                {/* Live file tree */}
+                {job.status === 'running' && (
+                  <FileTree files={liveFiles} live />
                 )}
 
                 {/* Last Run clickable card */}

@@ -165,11 +165,34 @@ export interface RollbackResult {
   errors: string[]
 }
 
+export type SyncFileAction = 'copied' | 'deleted' | 'skipped' | 'errored'
+
+export interface SyncFileEvent {
+  relativePath: string
+  isDirectory:  boolean
+  action:       SyncFileAction
+  size:         number | null
+  mtimeMs:      number | null
+  errorMsg?:    string
+}
+
+export interface SyncLogFile {
+  id:            number
+  run_id:        number
+  relative_path: string
+  is_directory:  boolean
+  action:        SyncFileAction
+  size:          number | null
+  mtime_ms:      number | null
+  error_msg:     string | null
+}
+
 export type ServerToBrowser =
   | { type: 'agent:online';  deviceId: string; hostname: string }
   | { type: 'agent:offline'; deviceId: string }
   | { type: 'job:status';    jobId: string; status: JobStatus }
   | { type: 'job:progress';  progress: SyncProgress }
+  | { type: 'job:file:done'; jobId: string; file: SyncFileEvent }
   | { type: 'job:complete';  result: SyncResult }
   | { type: 'job:cancelled'; jobId: string }
   | { type: 'job:error';     jobId: string; error: string }

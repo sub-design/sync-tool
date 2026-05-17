@@ -3,7 +3,7 @@ import express from 'express'
 import cors from 'cors'
 import http from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
-import { initDb, jobsDb, logDb } from './db'
+import { initDb, jobsDb, logDb, type SyncLogFile } from './db'
 import { createJobsRouter } from './routes/jobs'
 import { createAuthRouter } from './routes/auth'
 import { createDevicesRouter } from './routes/devices'
@@ -134,6 +134,9 @@ const agents = new Map<string, AgentConn>()
 // jobId → logId for in-flight rollbacks (correlates agent response with DB row)
 const pendingRollbacks = new Map<string, number>()
 
+// jobId → file events buffered during a sync run (flushed on job:complete)
+const inFlightFiles = new Map<string, SyncLogFile[]>()
+
 // ── Pending browse requests ────────────────────────────────────────────────────
 
 interface BrowsePending {
@@ -249,6 +252,22 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
         broadcastToBrowsers({ type: 'job:progress', progress: msg.progress }, jUid)
         break
       }
+      case 'job:file:done': {
+        const buf = inFlightFiles.get(msg.jobId) ?? []
+        buf.push({
+          run_id:        0,  // placeholder; replaced when run is created on job:complete
+          relative_path: msg.file.relativePath,
+          is_directory:  msg.file.isDirectory,
+          action:        msg.file.action,
+          size:          msg.file.size,
+          mtime_ms:      msg.file.mtimeMs,
+          error_msg:     msg.file.errorMsg ?? null,
+        })
+        inFlightFiles.set(msg.jobId, buf)
+        const jUid = await jobsDb.getUserId(msg.jobId)
+        broadcastToBrowsers({ type: 'job:file:done', jobId: msg.jobId, file: msg.file }, jUid)
+        break
+      }
       case 'job:trigger': {
         const job = await jobsDb.get(msg.jobId)
         if (job?.watch) await queueJob(job, msg.reason)
@@ -270,6 +289,11 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
         if (result.rollbackManifest && deviceId) {
           await logDb.saveRollbackManifest(logId, result.rollbackManifest, deviceId)
         }
+        const files = inFlightFiles.get(result.jobId)
+        inFlightFiles.delete(result.jobId)
+        if (files && files.length > 0) {
+          void logDb.insertFiles(logId, files.map(f => ({ ...f, run_id: logId })))
+        }
         broadcastToBrowsers({ type: 'job:complete', result }, jUid)
         void notifyJob(job, { status: 'completed', result })
         console.log(`[api] Job ${result.jobId} completed — ${result.filesCopied} copied, ${result.filesDeleted ?? 0} deleted`)
@@ -280,6 +304,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
         const jUid = await jobsDb.getUserId(msg.jobId)
         await jobsDb.setStatus(msg.jobId, 'cancelled')
         await logDb.cancel(msg.jobId)
+        inFlightFiles.delete(msg.jobId)
         broadcastToBrowsers({ type: 'job:cancelled', jobId: msg.jobId }, jUid)
         void notifyJob(job, { status: 'cancelled', jobId: msg.jobId })
         break
@@ -289,6 +314,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
         const jUid = await jobsDb.getUserId(msg.jobId)
         await jobsDb.setStatus(msg.jobId, 'error', msg.error)
         await logDb.fail(msg.jobId, msg.error)
+        inFlightFiles.delete(msg.jobId)
         broadcastToBrowsers({ type: 'job:error', jobId: msg.jobId, error: msg.error }, jUid)
         void notifyJob(job, { status: 'error', jobId: msg.jobId, error: msg.error })
         console.error(`[api] Job ${msg.jobId} failed: ${msg.error}`)
@@ -422,6 +448,13 @@ app.use('/api/jobs',    createJobsRouter(
   pendingRollbacks,
   () => { void broadcastWatchConfig() },
 ))
+
+app.get('/api/runs/:runId/files', requireAuth, async (req, res) => {
+  const runId = parseInt(req.params.runId, 10)
+  if (isNaN(runId)) { res.status(400).json({ error: 'Invalid runId' }); return }
+  const files = await logDb.getFiles(runId)
+  res.json(files)
+})
 
 app.get('/api/browse', requireAuth, async (req, res) => {
   const userId   = req.userId

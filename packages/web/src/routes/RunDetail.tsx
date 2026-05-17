@@ -23,6 +23,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { formatAbsolute, formatRelative, formatDuration, formatBytes } from '@/lib/format'
 import type { SyncLogEntry } from '@/components/SyncLogTable'
+import FileTree from '@/components/FileTree'
 import * as api from '@/lib/api'
 
 // ── Log helpers (same pattern as JobDetail Logs tab) ─────────────────────────
@@ -102,6 +103,12 @@ export default function RunDetail() {
   })
 
   const entry = logData?.find(e => e.id === runId)
+
+  const { data: runFiles, isLoading: runFilesLoading } = useQuery({
+    queryKey: ['run-files', runId],
+    queryFn: () => api.getRunFiles(runId!),
+    enabled: !!runId && !!entry,
+  })
 
   if (!entry && logData) {
     return (
@@ -232,6 +239,14 @@ export default function RunDetail() {
         <Tabs defaultValue="summary">
           <TabsList>
             <TabsTrigger value="summary">Summary</TabsTrigger>
+            <TabsTrigger value="files">
+              Files
+              {runFiles && runFiles.length > 0 && (
+                <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-xs tabular-nums">
+                  {runFiles.length.toLocaleString()}
+                </span>
+              )}
+            </TabsTrigger>
             <TabsTrigger value="logs">
               Logs
               {allErrors.length > 0 && (
@@ -360,6 +375,11 @@ export default function RunDetail() {
                 This is a rollback run. Rollback runs cannot themselves be rolled back.
               </div>
             )}
+          </TabsContent>
+
+          {/* ── Files ── */}
+          <TabsContent value="files" className="mt-4">
+            <FileTree files={runFiles ?? []} loading={runFilesLoading} />
           </TabsContent>
 
           {/* ── Logs ── */}

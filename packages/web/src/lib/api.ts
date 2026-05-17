@@ -1,4 +1,4 @@
-import type { Job, DirEntry, AgentToken, AuditEntry } from '../types'
+import type { Job, DirEntry, AgentToken, AuditEntry, SyncLogFile } from '../types'
 import { getToken, clearToken, getOrgId } from './auth'
 
 const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001'
@@ -80,6 +80,10 @@ export function cancelJob(id: string): Promise<void> {
 export function getJobLog(id: string, limit?: number): Promise<unknown[]> {
   const qs = limit != null ? `?limit=${limit}` : ''
   return apiFetch(`/api/jobs/${id}/log${qs}`)
+}
+
+export function getRunFiles(runId: string): Promise<SyncLogFile[]> {
+  return apiFetch(`/api/runs/${runId}/files`)
 }
 
 export function listDevices(): Promise<AgentToken[]> {

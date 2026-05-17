@@ -1,4 +1,4 @@
-import type { SyncResult, SyncProgress, Job, RollbackManifest, RollbackFileAction, RollbackSide, RollbackResult } from '@sync-tool/shared'
+import type { SyncResult, SyncProgress, SyncFileEvent, Job, RollbackManifest, RollbackFileAction, RollbackSide, RollbackResult } from '@sync-tool/shared'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
@@ -226,6 +226,7 @@ export async function runSync(
   state:      StateStore,
   onProgress: (p: Partial<SyncProgress>) => void = () => {},
   signal?:     AbortSignal,
+  onFileDone?: (file: SyncFileEvent) => void,
 ): Promise<SyncResult> {
   const startedAt = Date.now()
   const result: SyncResult = {
@@ -264,14 +265,14 @@ export async function runSync(
     await dstBackend.mkdirp(dstPath)
 
     if (job.direction === 'bidir') {
-      await syncBidirectional(job, srcBackend, dstBackend, srcPath, dstPath, state, result, onProgress, signal, rollback)
+      await syncBidirectional(job, srcBackend, dstBackend, srcPath, dstPath, state, result, onProgress, signal, rollback, onFileDone)
     } else {
       const [sourcePath, targetPath, sourceBackend, targetBackend] = job.direction === 'rtl'
         ? [dstPath, srcPath, dstBackend, srcBackend]
         : [srcPath, dstPath, srcBackend, dstBackend]
       const targetSide: RollbackSide = job.direction === 'rtl' ? 'src' : 'dst'
 
-      await syncOneWay(job, sourcePath, targetPath, sourceBackend, targetBackend, state, result, onProgress, signal, rollback, targetSide)
+      await syncOneWay(job, sourcePath, targetPath, sourceBackend, targetBackend, state, result, onProgress, signal, rollback, targetSide, onFileDone)
     }
   } finally {
     if (lockDir) await releaseLock(lockDir)
@@ -325,6 +326,7 @@ async function syncOneWay(
   signal?:     AbortSignal,
   rollback?:   RollbackContext,
   targetSide?: RollbackSide,
+  onFileDone?: (file: SyncFileEvent) => void,
 ) {
   throwIfAborted(signal)
   const srcFiles = await srcBackend.walk(srcPath)
@@ -372,12 +374,15 @@ async function syncOneWay(
           ...srcEntry,
           absolutePath: joinRemote(dstPath, srcEntry.relativePath),
         })
+        onFileDone?.({ relativePath: srcEntry.relativePath, isDirectory: false, action: 'copied', size: srcEntry.size, mtimeMs: srcEntry.mtimeMs })
       } catch (err: any) {
         result.filesErrored++
         result.errors.push(`${srcEntry.relativePath}: ${err.message}`)
+        onFileDone?.({ relativePath: srcEntry.relativePath, isDirectory: false, action: 'errored', size: srcEntry.size, mtimeMs: srcEntry.mtimeMs, errorMsg: err.message })
       }
     } else {
       result.filesSkipped++
+      onFileDone?.({ relativePath: srcEntry.relativePath, isDirectory: false, action: 'skipped', size: srcEntry.size, mtimeMs: srcEntry.mtimeMs })
     }
 
     processed++
@@ -398,6 +403,7 @@ async function syncOneWay(
     if (!dstBackend.delete) {
       result.filesErrored++
       result.errors.push(`${dstEntry.relativePath}: destination backend does not support delete`)
+      onFileDone?.({ relativePath: dstEntry.relativePath, isDirectory: dstEntry.isDirectory, action: 'errored', size: dstEntry.size, mtimeMs: dstEntry.mtimeMs, errorMsg: 'destination backend does not support delete' })
       continue
     }
 
@@ -408,9 +414,11 @@ async function syncOneWay(
       await dstBackend.delete(joinRemote(dstPath, dstEntry.relativePath))
       result.filesDeleted = (result.filesDeleted ?? 0) + 1
       dstFiles.delete(dstEntry.relativePath)
+      onFileDone?.({ relativePath: dstEntry.relativePath, isDirectory: dstEntry.isDirectory, action: 'deleted', size: dstEntry.size, mtimeMs: dstEntry.mtimeMs })
     } catch (err: any) {
       result.filesErrored++
       result.errors.push(`${dstEntry.relativePath}: ${err.message}`)
+      onFileDone?.({ relativePath: dstEntry.relativePath, isDirectory: dstEntry.isDirectory, action: 'errored', size: dstEntry.size, mtimeMs: dstEntry.mtimeMs, errorMsg: err.message })
     }
   }
 
@@ -492,6 +500,7 @@ async function syncBidirectional(
   onProgress: (p: Partial<SyncProgress>) => void,
   signal?:    AbortSignal,
   rollback?:  RollbackContext,
+  onFileDone?: (file: SyncFileEvent) => void,
 ) {
   throwIfAborted(signal)
   const srcFiles  = await srcBackend.walk(srcPath)
@@ -550,6 +559,7 @@ async function syncBidirectional(
       }
     }
 
+    let biFileAction: 'copied' | 'deleted' | 'skipped' | 'errored' = 'skipped'
     try {
       switch (action) {
         case 'copy-to-dst':
@@ -563,6 +573,7 @@ async function syncBidirectional(
             applyTransferStats(result, transferred)
             stateDstEntry = srcEntry
             checksum = transferred.checksum ?? checksum
+            biFileAction = 'copied'
           }
           break
 
@@ -577,6 +588,7 @@ async function syncBidirectional(
             applyTransferStats(result, transferred)
             stateSrcEntry = dstEntry
             checksum = transferred.checksum ?? checksum
+            biFileAction = 'copied'
           }
           break
 
@@ -585,6 +597,7 @@ async function syncBidirectional(
             if (rollback && dstEntry) await backupBeforeAction(dstEntry, 'dst', 'deleted', dstBackend, rollback)
             await dstBackend.delete(joinRemote(dstPath, rel))
             stateDstEntry = undefined
+            biFileAction = 'deleted'
           } else {
             console.log(`[sync] Would safe-delete from dst (not supported for this backend): ${rel}`)
           }
@@ -595,6 +608,7 @@ async function syncBidirectional(
             if (rollback && srcEntry) await backupBeforeAction(srcEntry, 'src', 'deleted', srcBackend, rollback)
             await srcBackend.delete(joinRemote(srcPath, rel))
             stateSrcEntry = undefined
+            biFileAction = 'deleted'
           } else {
             console.log(`[sync] Would safe-delete from src (not supported for this backend): ${rel}`)
           }
@@ -602,12 +616,17 @@ async function syncBidirectional(
 
         case 'skip':
           result.filesSkipped++
+          biFileAction = 'skipped'
           break
       }
     } catch (err: any) {
       result.filesErrored++
       result.errors.push(`${rel}: ${err.message}`)
+      biFileAction = 'errored'
     }
+
+    const biEntry = srcEntry ?? dstEntry
+    onFileDone?.({ relativePath: rel, isDirectory: false, action: biFileAction, size: biEntry?.size ?? null, mtimeMs: biEntry?.mtimeMs ?? null })
 
     if (!checksum && !job.reliability?.encryptionEnabled && action === 'skip' && stateSrcEntry && stateDstEntry) {
       try {

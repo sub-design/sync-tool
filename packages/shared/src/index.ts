@@ -178,6 +178,17 @@ export interface SyncProgress {
   bytesTransferred: number
 }
 
+export type SyncFileAction = 'copied' | 'deleted' | 'skipped' | 'errored'
+
+export interface SyncFileEvent {
+  relativePath: string
+  isDirectory:  boolean
+  action:       SyncFileAction
+  size:         number | null
+  mtimeMs:      number | null
+  errorMsg?:    string
+}
+
 // ─────────────────────────────────────────────
 //  WebSocket protocol: Agent ↔ API Server
 //  Agent connects to ws://host:port/agent
@@ -196,6 +207,7 @@ export type AgentToServer =
   | { type: 'job:trigger';   jobId: string; reason: 'watch'; path?: string }
   | { type: 'job:started';   jobId: string }
   | { type: 'job:progress';  progress: SyncProgress }
+  | { type: 'job:file:done'; jobId: string; file: SyncFileEvent }
   | { type: 'job:complete';  result: SyncResult }
   | { type: 'job:cancelled'; jobId: string }
   | { type: 'job:error';     jobId: string; error: string }
@@ -222,6 +234,7 @@ export type ServerToBrowser =
   | { type: 'agent:offline';  deviceId: string }
   | { type: 'job:status';     jobId: string; status: JobStatus }
   | { type: 'job:progress';   progress: SyncProgress }
+  | { type: 'job:file:done';  jobId: string; file: SyncFileEvent }
   | { type: 'job:complete';   result: SyncResult }
   | { type: 'job:cancelled';  jobId: string }
   | { type: 'job:error';      jobId: string; error: string }

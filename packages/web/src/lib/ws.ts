@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ServerToBrowser, SyncProgress } from '../types'
+import type { ServerToBrowser, SyncProgress, SyncFileEvent } from '../types'
 import { getToken, getOrgId } from './auth'
 
 const WS_BASE = (import.meta.env.VITE_WS_URL as string | undefined) ?? 'ws://localhost:3001'
@@ -62,13 +62,15 @@ export function subscribe<T extends ServerToBrowser['type']>(
 }
 
 interface WsStore {
-  agentsOnline: Map<string, string>
-  jobProgress: Map<string, SyncProgress>
+  agentsOnline:  Map<string, string>
+  jobProgress:   Map<string, SyncProgress>
+  liveRunFiles:  Map<string, SyncFileEvent[]>  // jobId → accumulated file events for running job
 }
 
 export const useWsStore = create<WsStore>(() => ({
-  agentsOnline: new Map(),
-  jobProgress: new Map(),
+  agentsOnline:  new Map(),
+  jobProgress:   new Map(),
+  liveRunFiles:  new Map(),
 }))
 
 function handleStore(msg: ServerToBrowser) {
@@ -89,6 +91,20 @@ function handleStore(msg: ServerToBrowser) {
       const m = new Map(s.jobProgress)
       m.set(msg.progress.jobId, msg.progress)
       return { jobProgress: m }
+    })
+  } else if (msg.type === 'job:file:done') {
+    useWsStore.setState(s => {
+      const m = new Map(s.liveRunFiles)
+      const prev = m.get(msg.jobId) ?? []
+      m.set(msg.jobId, [...prev, msg.file])
+      return { liveRunFiles: m }
+    })
+  } else if (msg.type === 'job:complete' || msg.type === 'job:cancelled' || msg.type === 'job:error') {
+    const jobId = msg.type === 'job:complete' ? msg.result.jobId : msg.jobId
+    useWsStore.setState(s => {
+      const m = new Map(s.liveRunFiles)
+      m.delete(jobId)
+      return { liveRunFiles: m }
     })
   }
 }
