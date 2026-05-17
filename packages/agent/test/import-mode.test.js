@@ -32,6 +32,36 @@ test('import mode falls back to file mtime when EXIF is missing', async () => {
   })
 })
 
+test('import mode can use source tree destination layout', async () => {
+  await withTempPair(async ({ srcRoot, dstRoot }) => {
+    await fs.mkdir(path.join(srcRoot, 'camera', 'roll-1'), { recursive: true })
+    await fs.writeFile(path.join(srcRoot, 'camera', 'roll-1', 'clip.mp4'), 'video bytes')
+
+    const result = await runImport(srcRoot, dstRoot, 'import-same-tree', {
+      destinationLayout: 'sameTree',
+    })
+
+    assert.equal(result.filesCopied, 1)
+    assert.equal(await readText(path.join(dstRoot, 'camera', 'roll-1', 'clip.mp4')), 'video bytes')
+  })
+})
+
+test('import mode can use mtime even when EXIF exists', async () => {
+  await withTempPair(async ({ srcRoot, dstRoot }) => {
+    const sourcePath = path.join(srcRoot, 'IMG_0002.JPG')
+    const mtime = new Date(2023, 3, 10, 8, 0, 0)
+    await fs.writeFile(sourcePath, jpegWithDateTimeOriginal('2022:01:05 12:34:56'))
+    await fs.utimes(sourcePath, mtime, mtime)
+
+    const result = await runImport(srcRoot, dstRoot, 'import-date-source-mtime', {
+      dateSource: 'mtime',
+    })
+
+    assert.equal(result.filesCopied, 1)
+    assert.equal(await readText(path.join(dstRoot, '2023', '2023-04-10', 'IMG_0002.JPG')), await readText(sourcePath))
+  })
+})
+
 test('import mode skips unsupported files', async () => {
   await withTempPair(async ({ srcRoot, dstRoot }) => {
     await fs.writeFile(path.join(srcRoot, 'notes.txt'), 'not media')
@@ -108,7 +138,7 @@ test('missing jobMode still uses existing sync behavior', async () => {
   })
 })
 
-async function runImport(srcRoot, dstRoot, id) {
+async function runImport(srcRoot, dstRoot, id, overrides = {}) {
   const now = Date.now()
   return runImportSync({
     id,
@@ -120,9 +150,13 @@ async function runImport(srcRoot, dstRoot, id) {
     transferMode: 'full',
     deletionPolicy: 'backup',
     reliability: { encryptionEnabled: false },
+    destinationLayout: 'byCaptureDate',
+    dateSource: 'exifThenMtime',
+    collisionPolicy: 'skipSameErrorDifferent',
     status: 'idle',
     createdAt: now,
     updatedAt: now,
+    ...overrides,
   }, localBackend, localBackend, srcRoot, dstRoot)
 }
 

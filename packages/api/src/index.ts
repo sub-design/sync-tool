@@ -9,6 +9,8 @@ import { createAuthRouter } from './routes/auth'
 import { createDevicesRouter } from './routes/devices'
 import { createAuditRouter } from './routes/audit'
 import { createEndpointsRouter } from './routes/endpoints'
+import { createJobTemplatesRouter } from './routes/jobTemplates'
+import { createCollectionsRouter } from './routes/collections'
 import { createOrgsRouter } from './routes/orgs'
 import { createAnalyticsRouter } from './routes/analytics'
 import { authFromWsRequest, requireAuth } from './middleware/requireAuth'
@@ -436,6 +438,8 @@ app.use('/api/analytics', createAnalyticsRouter())
 app.use('/api/devices',   createDevicesRouter())
 app.use('/api/audit',     createAuditRouter())
 app.use('/api/endpoints', createEndpointsRouter())
+app.use('/api/job-templates', createJobTemplatesRouter())
+app.use('/api/collections',  createCollectionsRouter())
 app.use('/api/jobs',    createJobsRouter(
   async (msg) => {
     if (msg.type === 'job:run')    await queueJob(msg.job, 'manual')

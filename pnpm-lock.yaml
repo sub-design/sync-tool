@@ -50,6 +50,9 @@ importers:
       p-retry:
         specifier: 4.6.2
         version: 4.6.2
+      picomatch:
+        specifier: ^4.0.4
+        version: 4.0.4
       ssh2-sftp-client:
         specifier: ^12.1.1
         version: 12.1.1
@@ -66,6 +69,9 @@ importers:
       '@types/node':
         specifier: ^20.12.12
         version: 20.19.41
+      '@types/picomatch':
+        specifier: ^4.0.3
+        version: 4.0.3
       '@types/ssh2-sftp-client':
         specifier: ^9.0.6
         version: 9.0.6
@@ -2364,6 +2370,9 @@ packages:
 
   '@types/nodemailer@6.4.17':
     resolution: {integrity: sha512-I9CCaIp6DTldEg7vyUTZi8+9Vo0hi1/T8gv3C89yk1rSAAzoKQ8H8ki/jBYJSFoH/BisgLP8tkZMlQ91CIquww==}
+
+  '@types/picomatch@4.0.3':
+    resolution: {integrity: sha512-iG0T6+nYJ9FAPmx9SsUlnwcq1ZVRuCXcVEvWnntoPlrOpwtSTKNDC9uVAxTsC3PUvJ+99n4RpAcNgBbHX3JSnQ==}
 
   '@types/plist@3.0.5':
     resolution: {integrity: sha512-E6OCaRmAe4WDmWNsL/9RMqdkkzDCY1etutkflWk4c+AcjDU07Pcz1fQwTX0TQz+Pxqn9i4L1TU3UFpjnrcDgxA==}
@@ -7790,6 +7799,8 @@ snapshots:
   '@types/nodemailer@6.4.17':
     dependencies:
       '@types/node': 24.12.4
+
+  '@types/picomatch@4.0.3': {}
 
   '@types/plist@3.0.5':
     dependencies:

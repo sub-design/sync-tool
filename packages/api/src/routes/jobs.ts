@@ -69,7 +69,8 @@ export function createJobsRouter(
       name, source = '', destination = '',
       sourceEndpointId, destinationEndpointId,
       direction = 'ltr', jobMode = 'sync', transferMode = 'auto', deletionPolicy = 'backup', reliability = {},
-      sourceDeviceId, destinationDeviceId, watch = false, schedule, autoOptions = {},
+      filters = {}, destinationLayout = 'byCaptureDate', dateSource = 'exifThenMtime', collisionPolicy = 'skipSameErrorDifferent',
+      templateId, sourceDeviceId, destinationDeviceId, watch = false, schedule, autoOptions = {},
     } = req.body
     if (!name) { res.status(400).json({ error: 'name is required' }); return }
     if (!source && !sourceEndpointId) {
@@ -89,6 +90,7 @@ export function createJobsRouter(
         id: uuid(), name, source: resolved.source, destination: resolved.destination,
         direction, jobMode, transferMode, deletionPolicy,
         reliability: { encryptionEnabled: true, ...reliability },
+        filters, destinationLayout, dateSource, collisionPolicy, templateId,
         sourceDeviceId, destinationDeviceId,
         sourceEndpointId: sourceEndpointId ?? undefined,
         destinationEndpointId: destinationEndpointId ?? undefined,
@@ -101,7 +103,7 @@ export function createJobsRouter(
     auditRequest(req, 'job.created', {
       targetType: 'job',
       targetId:   job.id,
-      metadata:   { name: job.name, jobMode, sourceDeviceId, destinationDeviceId, sourceEndpointId, destinationEndpointId, watch: Boolean(watch), schedule, autoOptions },
+      metadata:   { name: job.name, jobMode, templateId, sourceDeviceId, destinationDeviceId, sourceEndpointId, destinationEndpointId, watch: Boolean(watch), schedule, autoOptions, filters, destinationLayout, dateSource, collisionPolicy },
     })
     res.status(201).json(job)
   })

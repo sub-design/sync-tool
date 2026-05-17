@@ -71,6 +71,9 @@ export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'ca
 export type TransferMode     = 'full' | 'delta' | 'auto'
 export type ConflictStrategy = 'newer-wins' | 'skip' | 'manual'
 export type DeletionPolicy   = 'backup' | 'backup-with-deletes' | 'mirror'
+export type DestinationLayout = 'sameTree' | 'byCaptureDate'
+export type DateSource       = 'mtime' | 'exifThenMtime'
+export type CollisionPolicy  = 'skipSameErrorDifferent'
 
 export interface JobReliability {
   encryptionEnabled?: boolean
@@ -96,6 +99,14 @@ export interface JobAutoOptions {
   autoClearTreeAfterSync?:  boolean
 }
 
+export interface JobFilters {
+  include?:        string[]
+  exclude?:        string[]
+  excludeHidden?:  boolean
+  excludeSystem?:  boolean
+  maxFileSizeMb?:  number
+}
+
 export interface Job {
   id:          string
   orgId?:      string   // set by API server; agents can ignore
@@ -109,17 +120,66 @@ export interface Job {
   reliability?: JobReliability
   sourceDeviceId?: string
   destinationDeviceId?: string
+  templateId?: string
+  collectionId?: string
   sourceEndpointId?:      string   // ID of a saved Endpoint; resolved server-side at run time
   destinationEndpointId?: string
   watch?:      boolean      // auto-trigger when local filesystem changes are observed
   schedule?:   string       // cron expression, e.g. "0 */6 * * *"
   autoOptions?: JobAutoOptions
+  filters?:    JobFilters
+  destinationLayout?: DestinationLayout
+  dateSource?:        DateSource
+  collisionPolicy?:   CollisionPolicy
   jobMode?:    JobMode       // default: 'sync'
   status:      JobStatus
   lastRun?:    number       // unix ms
   lastError?:  string
   createdAt:   number
   updatedAt:   number
+}
+
+export type JobTemplateDefaults = Partial<Pick<Job,
+  'name' | 'source' | 'destination' | 'direction' | 'jobMode' | 'transferMode' |
+  'conflictStrategy' | 'deletionPolicy' | 'reliability' | 'filters' |
+  'destinationLayout' | 'dateSource' | 'collisionPolicy' |
+  'sourceDeviceId' | 'destinationDeviceId' | 'sourceEndpointId' | 'destinationEndpointId' |
+  'watch' | 'schedule' | 'autoOptions'
+>>
+
+export interface JobTemplate {
+  id:          string
+  orgId?:      string
+  name:        string
+  description?: string
+  defaults:    JobTemplateDefaults
+  createdAt:   number
+  updatedAt:   number
+}
+
+export interface Collection {
+  id:           string
+  orgId?:       string
+  name:         string
+  description?: string
+  deviceIds:    string[]
+  createdAt:    number
+  updatedAt:    number
+}
+
+export interface CollectionTemplate {
+  id:           string
+  orgId?:       string
+  collectionId: string
+  templateId:   string
+  source:       string
+  destination:  string
+  appliedAt:    number
+}
+
+export interface CollectionTemplateWithMeta extends CollectionTemplate {
+  templateName?: string
+  jobCount:     number
 }
 
 export type RollbackFileAction = 'overwritten' | 'deleted' | 'created'

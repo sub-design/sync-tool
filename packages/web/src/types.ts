@@ -37,6 +37,9 @@ export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'ca
 export type TransferMode     = 'full' | 'delta' | 'auto'
 export type ConflictStrategy = 'newer-wins' | 'skip' | 'manual'
 export type DeletionPolicy   = 'backup' | 'backup-with-deletes' | 'mirror'
+export type DestinationLayout = 'sameTree' | 'byCaptureDate'
+export type DateSource       = 'mtime' | 'exifThenMtime'
+export type CollisionPolicy  = 'skipSameErrorDifferent'
 export type BackendType  = 'local' | 'sftp' | 'ftp' | 'ftps' | 's3' | 'smb' | 'nfs'
 
 export interface SavedEndpointConfig {
@@ -110,12 +113,26 @@ export interface JobAutoOptions {
   autoClearTreeAfterSync?: boolean
 }
 
+export interface JobFilters {
+  include?: string[]
+  exclude?: string[]
+  excludeHidden?: boolean
+  excludeSystem?: boolean
+  maxFileSizeMb?: number
+}
+
 export interface Job {
   id: string; name: string; source: string; destination: string
   direction: JobDirection; jobMode?: JobMode; transferMode?: TransferMode
   conflictStrategy?: ConflictStrategy
   deletionPolicy?: DeletionPolicy
   reliability?: JobReliability
+  filters?: JobFilters
+  destinationLayout?: DestinationLayout
+  dateSource?: DateSource
+  collisionPolicy?: CollisionPolicy
+  templateId?: string
+  collectionId?: string
   sourceDeviceId?: string; destinationDeviceId?: string
   sourceEndpointId?: string; destinationEndpointId?: string
   watch?: boolean
@@ -123,6 +140,64 @@ export interface Job {
   autoOptions?: JobAutoOptions
   status: JobStatus
   lastRun?: number; nextRun?: number; lastError?: string; createdAt: number; updatedAt: number
+}
+
+export type JobTemplateDefaults = Partial<Pick<Job,
+  'name' | 'source' | 'destination' | 'direction' | 'jobMode' | 'transferMode' |
+  'conflictStrategy' | 'deletionPolicy' | 'reliability' | 'filters' |
+  'destinationLayout' | 'dateSource' | 'collisionPolicy' |
+  'sourceDeviceId' | 'destinationDeviceId' | 'sourceEndpointId' | 'destinationEndpointId' |
+  'watch' | 'schedule' | 'autoOptions'
+>>
+
+export interface JobTemplate {
+  id: string
+  orgId?: string
+  name: string
+  description?: string
+  defaults: JobTemplateDefaults
+  createdAt: number
+  updatedAt: number
+}
+
+export interface Collection {
+  id:           string
+  orgId?:       string
+  name:         string
+  description?: string
+  deviceIds:    string[]
+  createdAt:    number
+  updatedAt:    number
+}
+
+export interface CollectionTemplateLink {
+  id:           string
+  collectionId: string
+  templateId:   string
+  templateName?: string
+  source:       string
+  destination:  string
+  appliedAt:    number
+  jobCount:     number
+}
+
+export interface ApplyPreview {
+  wouldCreate:  number
+  alreadyExist: number
+  devices:      { id: string; name: string; jobExists: boolean }[]
+}
+
+export interface ApplyResult {
+  created: number
+  skipped: number
+  jobs:    Job[]
+}
+
+export interface CollectionUpdateResult {
+  collection:      Collection
+  autoCreated:     number
+  deletedOrphans:  number
+  keptOrphans:     number
 }
 
 export interface SyncProgress {

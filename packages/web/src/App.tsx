@@ -15,6 +15,9 @@ import Audit from './routes/Audit'
 import Endpoints from './routes/Endpoints'
 import OrgSettings from './routes/OrgSettings'
 import Analytics from './routes/Analytics'
+import Templates from './routes/Templates'
+import Collections from './routes/Collections'
+import CollectionDetail from './routes/CollectionDetail'
 
 const queryClient = new QueryClient()
 
@@ -33,6 +36,9 @@ export default function App() {
               <Route path="/download" element={<Download />} />
               <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />
               <Route path="/jobs" element={<RequireAuth><Jobs /></RequireAuth>} />
+              <Route path="/templates"   element={<RequireAuth><Templates /></RequireAuth>} />
+              <Route path="/collections"     element={<RequireAuth><Collections /></RequireAuth>} />
+              <Route path="/collections/:id" element={<RequireAuth><CollectionDetail /></RequireAuth>} />
               <Route path="/jobs/:id" element={<RequireAuth><JobDetail /></RequireAuth>} />
               <Route path="/jobs/:jobId/runs/:runId" element={<RequireAuth><RunDetail /></RequireAuth>} />
               <Route path="/devices" element={<RequireAuth><Devices /></RequireAuth>} />

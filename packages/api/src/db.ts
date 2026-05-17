@@ -1,6 +1,6 @@
 import postgres from 'postgres'
 import { v4 as uuid } from 'uuid'
-import type { Job, Endpoint, SavedEndpointConfig, Organization, Membership, OrgRole, SyncResult, RollbackManifest, RollbackResult } from '@sync-tool/shared'
+import type { Job, Endpoint, SavedEndpointConfig, Organization, Membership, OrgRole, SyncResult, RollbackManifest, RollbackResult, JobTemplate, JobTemplateDefaults, Collection, CollectionTemplate } from '@sync-tool/shared'
 
 // ── Connection ────────────────────────────────────────────────────────────────
 
@@ -62,6 +62,11 @@ export async function initDb(): Promise<void> {
       transfer_mode         TEXT   DEFAULT 'auto',
       deletion_policy       TEXT   DEFAULT 'backup',
       reliability           TEXT   DEFAULT '{}',
+      filters               TEXT   DEFAULT '{}',
+      destination_layout    TEXT   DEFAULT 'byCaptureDate',
+      date_source           TEXT   DEFAULT 'exifThenMtime',
+      collision_policy      TEXT   DEFAULT 'skipSameErrorDifferent',
+      template_id           TEXT,
       source_device_id      TEXT,
       destination_device_id TEXT,
       watch                 BOOLEAN NOT NULL DEFAULT false,
@@ -95,6 +100,45 @@ export async function initDb(): Promise<void> {
       invited_by  TEXT,
       created_at  BIGINT NOT NULL,
       UNIQUE (user_id, org_id)
+    )
+  `
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS job_templates (
+      id          TEXT   PRIMARY KEY,
+      user_id     TEXT   REFERENCES users(id) ON DELETE CASCADE,
+      org_id      TEXT   REFERENCES organizations(id) ON DELETE CASCADE,
+      name        TEXT   NOT NULL,
+      description TEXT,
+      defaults    TEXT   NOT NULL DEFAULT '{}',
+      created_at  BIGINT NOT NULL,
+      updated_at  BIGINT NOT NULL
+    )
+  `
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS collections (
+      id          TEXT   PRIMARY KEY,
+      user_id     TEXT   REFERENCES users(id) ON DELETE CASCADE,
+      org_id      TEXT   REFERENCES organizations(id) ON DELETE CASCADE,
+      name        TEXT   NOT NULL,
+      description TEXT,
+      device_ids  TEXT   NOT NULL DEFAULT '[]',
+      created_at  BIGINT NOT NULL,
+      updated_at  BIGINT NOT NULL
+    )
+  `
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS collection_templates (
+      id            TEXT   PRIMARY KEY,
+      org_id        TEXT   REFERENCES organizations(id) ON DELETE CASCADE,
+      collection_id TEXT   NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+      template_id   TEXT   NOT NULL REFERENCES job_templates(id) ON DELETE CASCADE,
+      source        TEXT   NOT NULL DEFAULT '',
+      destination   TEXT   NOT NULL DEFAULT '',
+      applied_at    BIGINT NOT NULL,
+      UNIQUE (collection_id, template_id)
     )
   `
 
@@ -154,6 +198,12 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS job_mode TEXT NOT NULL DEFAULT 'sync'`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS deletion_policy TEXT DEFAULT 'backup'`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS reliability TEXT DEFAULT '{}'`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS filters TEXT DEFAULT '{}'`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS destination_layout TEXT DEFAULT 'byCaptureDate'`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS date_source TEXT DEFAULT 'exifThenMtime'`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS collision_policy TEXT DEFAULT 'skipSameErrorDifferent'`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS template_id TEXT`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS collection_id TEXT`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS source_device_id TEXT`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS destination_device_id TEXT`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS watch BOOLEAN NOT NULL DEFAULT false`,
@@ -183,6 +233,7 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE endpoints ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE`,
     `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE`,
     `ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL`,
+    `ALTER TABLE job_templates ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE`,
   ]) {
     await sql.unsafe(stmt)
   }
@@ -207,6 +258,12 @@ function rowToJob(row: Record<string, unknown>): Job {
     transferMode:        ((row.transfer_mode as string) ?? 'auto') as Job['transferMode'],
     deletionPolicy:      ((row.deletion_policy as string) ?? 'backup') as Job['deletionPolicy'],
     reliability:         parseJson(row.reliability as string),
+    filters:             parseFilters(row.filters),
+    destinationLayout:   ((row.destination_layout as string) ?? 'byCaptureDate') as Job['destinationLayout'],
+    dateSource:          ((row.date_source as string) ?? 'exifThenMtime') as Job['dateSource'],
+    collisionPolicy:     ((row.collision_policy as string) ?? 'skipSameErrorDifferent') as Job['collisionPolicy'],
+    templateId:          (row.template_id as string) ?? undefined,
+    collectionId:        (row.collection_id as string) ?? undefined,
     sourceDeviceId:        (row.source_device_id as string) ?? undefined,
     destinationDeviceId:   (row.destination_device_id as string) ?? undefined,
     orgId:                 (row.org_id as string) ?? undefined,
@@ -231,6 +288,28 @@ function parseJson(value: unknown): Job['reliability'] {
 function parseAutoOptions(value: unknown): Job['autoOptions'] {
   if (!value || typeof value !== 'string') return {}
   try { const p = JSON.parse(value); return p && typeof p === 'object' ? p : {} } catch { return {} }
+}
+
+function parseFilters(value: unknown): Job['filters'] {
+  if (!value || typeof value !== 'string') return {}
+  try { const p = JSON.parse(value); return p && typeof p === 'object' ? p : {} } catch { return {} }
+}
+
+function parseTemplateDefaults(value: unknown): JobTemplateDefaults {
+  if (!value || typeof value !== 'string') return {}
+  try { const p = JSON.parse(value); return p && typeof p === 'object' ? p : {} } catch { return {} }
+}
+
+function rowToJobTemplate(row: Record<string, unknown>): JobTemplate {
+  return {
+    id:          row.id as string,
+    orgId:      (row.org_id as string) ?? undefined,
+    name:        row.name as string,
+    description: (row.description as string) ?? undefined,
+    defaults:    parseTemplateDefaults(row.defaults),
+    createdAt:   Number(row.created_at),
+    updatedAt:   Number(row.updated_at),
+  }
 }
 
 // ── Users ─────────────────────────────────────────────────────────────────────
@@ -300,6 +379,15 @@ export const usersDb = {
       WHERE id = ${id} AND user_id = ${userId} AND revoked_at IS NULL
     `
     return result.count > 0
+  },
+
+  async getTokenForOrg(id: string, orgId: string): Promise<{ id: string; name: string } | undefined> {
+    const [row] = await sql`
+      SELECT id, name FROM agent_tokens
+      WHERE id = ${id} AND org_id = ${orgId} AND revoked_at IS NULL
+      LIMIT 1
+    `
+    return row ? { id: row.id, name: row.name } : undefined
   },
 
   async getToken(id: string, userId: string): Promise<{ id: string; name: string } | undefined> {
@@ -436,12 +524,14 @@ export const jobsDb = {
     const full: Job = { ...job, orgId: orgId ?? job.orgId, status: 'idle', createdAt: now, updatedAt: now }
     await sql`
       INSERT INTO jobs
-        (id, user_id, org_id, name, source, destination, direction, job_mode, transfer_mode, deletion_policy, reliability,
+        (id, user_id, org_id, name, source, destination, direction, job_mode, transfer_mode, deletion_policy, reliability, filters,
+         destination_layout, date_source, collision_policy, template_id, collection_id,
          source_device_id, destination_device_id, source_endpoint_id, destination_endpoint_id,
          watch, schedule, auto_options, status, created_at, updated_at)
       VALUES
         (${full.id}, ${userId}, ${full.orgId ?? null}, ${full.name}, ${full.source}, ${full.destination},
-         ${full.direction}, ${full.jobMode ?? 'sync'}, ${full.transferMode ?? 'auto'}, ${full.deletionPolicy ?? 'backup'}, ${JSON.stringify(full.reliability ?? {})},
+         ${full.direction}, ${full.jobMode ?? 'sync'}, ${full.transferMode ?? 'auto'}, ${full.deletionPolicy ?? 'backup'}, ${JSON.stringify(full.reliability ?? {})}, ${JSON.stringify(full.filters ?? {})},
+         ${full.destinationLayout ?? 'byCaptureDate'}, ${full.dateSource ?? 'exifThenMtime'}, ${full.collisionPolicy ?? 'skipSameErrorDifferent'}, ${full.templateId ?? null}, ${full.collectionId ?? null},
          ${full.sourceDeviceId ?? null}, ${full.destinationDeviceId ?? null},
          ${full.sourceEndpointId ?? null}, ${full.destinationEndpointId ?? null},
          ${full.watch ?? false}, ${full.schedule ?? null}, ${JSON.stringify(full.autoOptions ?? {})},
@@ -450,7 +540,7 @@ export const jobsDb = {
     return full
   },
 
-  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'jobMode' | 'transferMode' | 'deletionPolicy' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'sourceEndpointId' | 'destinationEndpointId' | 'watch' | 'schedule' | 'autoOptions'>>): Promise<Job | undefined> {
+  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'jobMode' | 'transferMode' | 'deletionPolicy' | 'reliability' | 'filters' | 'destinationLayout' | 'dateSource' | 'collisionPolicy' | 'templateId' | 'collectionId' | 'sourceDeviceId' | 'destinationDeviceId' | 'sourceEndpointId' | 'destinationEndpointId' | 'watch' | 'schedule' | 'autoOptions'>>): Promise<Job | undefined> {
     const existing = await jobsDb.get(id)
     if (!existing) return undefined
     const updated: Job = { ...existing, ...patch, updatedAt: Date.now() }
@@ -464,6 +554,12 @@ export const jobsDb = {
         transfer_mode = ${updated.transferMode ?? 'auto'},
         deletion_policy = ${updated.deletionPolicy ?? 'backup'},
         reliability = ${JSON.stringify(updated.reliability ?? {})},
+        filters = ${JSON.stringify(updated.filters ?? {})},
+        destination_layout = ${updated.destinationLayout ?? 'byCaptureDate'},
+        date_source = ${updated.dateSource ?? 'exifThenMtime'},
+        collision_policy = ${updated.collisionPolicy ?? 'skipSameErrorDifferent'},
+        template_id = ${updated.templateId ?? null},
+        collection_id = ${updated.collectionId ?? null},
         source_device_id = ${updated.sourceDeviceId ?? null},
         destination_device_id = ${updated.destinationDeviceId ?? null},
         source_endpoint_id = ${updated.sourceEndpointId ?? null},
@@ -475,6 +571,37 @@ export const jobsDb = {
       WHERE id = ${id}
     `
     return updated
+  },
+
+  async listByTemplateId(templateId: string): Promise<Job[]> {
+    const rows = await sql`SELECT * FROM jobs WHERE template_id = ${templateId} ORDER BY created_at DESC`
+    return rows.map(rowToJob)
+  },
+
+  async listByCollectionId(collectionId: string): Promise<Job[]> {
+    const rows = await sql`SELECT * FROM jobs WHERE collection_id = ${collectionId} ORDER BY created_at DESC`
+    return rows.map(rowToJob)
+  },
+
+  async deleteByCollectionAndDevices(collectionId: string, deviceIds: string[]): Promise<number> {
+    if (deviceIds.length === 0) return 0
+    const result = await sql`
+      DELETE FROM jobs
+      WHERE collection_id = ${collectionId}
+        AND source_device_id = ANY(${deviceIds})
+    `
+    return result.count
+  },
+
+  async findByCollectionTemplateDevice(collectionId: string, templateId: string, deviceId: string): Promise<Job | undefined> {
+    const [row] = await sql`
+      SELECT * FROM jobs
+      WHERE collection_id = ${collectionId}
+        AND template_id = ${templateId}
+        AND source_device_id = ${deviceId}
+      LIMIT 1
+    `
+    return row ? rowToJob(row) : undefined
   },
 
   async delete(id: string): Promise<boolean> {
@@ -493,6 +620,174 @@ export const jobsDb = {
         updated_at = ${now}
       WHERE id = ${id}
     `
+  },
+}
+
+// ── Job templates ────────────────────────────────────────────────────────────
+
+export const jobTemplatesDb = {
+  async listForOrg(orgId: string): Promise<JobTemplate[]> {
+    const rows = await sql`SELECT * FROM job_templates WHERE org_id = ${orgId} ORDER BY created_at DESC`
+    return rows.map(rowToJobTemplate)
+  },
+
+  async get(id: string): Promise<JobTemplate | undefined> {
+    const [row] = await sql`SELECT * FROM job_templates WHERE id = ${id}`
+    return row ? rowToJobTemplate(row) : undefined
+  },
+
+  async create(input: Omit<JobTemplate, 'createdAt' | 'updatedAt'>, userId: string, orgId: string): Promise<JobTemplate> {
+    const now = Date.now()
+    const template: JobTemplate = { ...input, orgId, createdAt: now, updatedAt: now }
+    await sql`
+      INSERT INTO job_templates (id, user_id, org_id, name, description, defaults, created_at, updated_at)
+      VALUES (${template.id}, ${userId}, ${orgId}, ${template.name}, ${template.description ?? null}, ${JSON.stringify(template.defaults ?? {})}, ${now}, ${now})
+    `
+    return template
+  },
+
+  async update(id: string, patch: Partial<Pick<JobTemplate, 'name' | 'description' | 'defaults'>>): Promise<JobTemplate | undefined> {
+    const existing = await jobTemplatesDb.get(id)
+    if (!existing) return undefined
+    const updated: JobTemplate = { ...existing, ...patch, updatedAt: Date.now() }
+    await sql`
+      UPDATE job_templates SET
+        name = ${updated.name},
+        description = ${updated.description ?? null},
+        defaults = ${JSON.stringify(updated.defaults ?? {})},
+        updated_at = ${updated.updatedAt}
+      WHERE id = ${id}
+    `
+    return updated
+  },
+
+  async delete(id: string): Promise<boolean> {
+    const result = await sql`DELETE FROM job_templates WHERE id = ${id}`
+    return result.count > 0
+  },
+}
+
+// ── Collections ──────────────────────────────────────────────────────────────
+
+function rowToCollection(row: Record<string, unknown>): Collection {
+  return {
+    id:          row.id as string,
+    orgId:       (row.org_id as string) ?? undefined,
+    name:        row.name as string,
+    description: (row.description as string) ?? undefined,
+    deviceIds:   JSON.parse((row.device_ids as string) || '[]') as string[],
+    createdAt:   Number(row.created_at),
+    updatedAt:   Number(row.updated_at),
+  }
+}
+
+export const collectionsDb = {
+  async listForOrg(orgId: string): Promise<Collection[]> {
+    const rows = await sql`SELECT * FROM collections WHERE org_id = ${orgId} ORDER BY created_at DESC`
+    return rows.map(rowToCollection)
+  },
+
+  async get(id: string): Promise<Collection | undefined> {
+    const [row] = await sql`SELECT * FROM collections WHERE id = ${id}`
+    return row ? rowToCollection(row) : undefined
+  },
+
+  async create(input: Omit<Collection, 'createdAt' | 'updatedAt'>, userId: string, orgId: string): Promise<Collection> {
+    const now = Date.now()
+    const collection: Collection = { ...input, orgId, createdAt: now, updatedAt: now }
+    await sql`
+      INSERT INTO collections (id, user_id, org_id, name, description, device_ids, created_at, updated_at)
+      VALUES (
+        ${collection.id}, ${userId}, ${orgId},
+        ${collection.name}, ${collection.description ?? null},
+        ${JSON.stringify(collection.deviceIds ?? [])},
+        ${now}, ${now}
+      )
+    `
+    return collection
+  },
+
+  async update(id: string, patch: Partial<Pick<Collection, 'name' | 'description' | 'deviceIds'>>): Promise<Collection | undefined> {
+    const existing = await collectionsDb.get(id)
+    if (!existing) return undefined
+    const updated: Collection = { ...existing, ...patch, updatedAt: Date.now() }
+    await sql`
+      UPDATE collections SET
+        name        = ${updated.name},
+        description = ${updated.description ?? null},
+        device_ids  = ${JSON.stringify(updated.deviceIds ?? [])},
+        updated_at  = ${updated.updatedAt}
+      WHERE id = ${id}
+    `
+    return updated
+  },
+
+  async delete(id: string): Promise<boolean> {
+    const result = await sql`DELETE FROM collections WHERE id = ${id}`
+    return result.count > 0
+  },
+}
+
+// ── Collection ↔ Template links ──────────────────────────────────────────────
+
+function rowToCollectionTemplate(row: Record<string, unknown>): CollectionTemplate {
+  return {
+    id:           row.id as string,
+    orgId:        (row.org_id as string) ?? undefined,
+    collectionId: row.collection_id as string,
+    templateId:   row.template_id as string,
+    source:       (row.source as string) ?? '',
+    destination:  (row.destination as string) ?? '',
+    appliedAt:    Number(row.applied_at),
+  }
+}
+
+export const collectionTemplatesDb = {
+  async listForCollection(collectionId: string): Promise<CollectionTemplate[]> {
+    const rows = await sql`SELECT * FROM collection_templates WHERE collection_id = ${collectionId} ORDER BY applied_at DESC`
+    return rows.map(rowToCollectionTemplate)
+  },
+
+  async listForTemplate(templateId: string): Promise<CollectionTemplate[]> {
+    const rows = await sql`SELECT * FROM collection_templates WHERE template_id = ${templateId} ORDER BY applied_at DESC`
+    return rows.map(rowToCollectionTemplate)
+  },
+
+  async get(collectionId: string, templateId: string): Promise<CollectionTemplate | undefined> {
+    const [row] = await sql`
+      SELECT * FROM collection_templates
+      WHERE collection_id = ${collectionId} AND template_id = ${templateId}
+      LIMIT 1
+    `
+    return row ? rowToCollectionTemplate(row) : undefined
+  },
+
+  async upsert(input: Omit<CollectionTemplate, 'id' | 'appliedAt'>, orgId: string): Promise<CollectionTemplate> {
+    const existing = await collectionTemplatesDb.get(input.collectionId, input.templateId)
+    const now      = Date.now()
+    if (existing) {
+      await sql`
+        UPDATE collection_templates SET
+          source      = ${input.source},
+          destination = ${input.destination},
+          applied_at  = ${now}
+        WHERE id = ${existing.id}
+      `
+      return { ...existing, source: input.source, destination: input.destination, appliedAt: now }
+    }
+    const id = uuid()
+    await sql`
+      INSERT INTO collection_templates (id, org_id, collection_id, template_id, source, destination, applied_at)
+      VALUES (${id}, ${orgId}, ${input.collectionId}, ${input.templateId}, ${input.source}, ${input.destination}, ${now})
+    `
+    return { id, orgId, collectionId: input.collectionId, templateId: input.templateId, source: input.source, destination: input.destination, appliedAt: now }
+  },
+
+  async delete(collectionId: string, templateId: string): Promise<boolean> {
+    const result = await sql`
+      DELETE FROM collection_templates WHERE collection_id = ${collectionId} AND template_id = ${templateId}
+    `
+    return result.count > 0
   },
 }
 

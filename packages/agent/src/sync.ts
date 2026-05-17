@@ -6,6 +6,7 @@ import { pipeline } from 'stream/promises'
 import { Transform } from 'stream'
 import pRetry from 'p-retry'
 import * as exifr from 'exifr'
+import picomatch from 'picomatch'
 import { transferFileDelta } from './delta/engine'
 import { streamSHA256 } from './delta/engine'
 import type { StoredFileState, StateStore } from './state'
@@ -161,6 +162,85 @@ const IMPORT_EXIF_EXTENSIONS = new Set([
   '.dng', '.cr2', '.cr3', '.nef', '.arw', '.raf', '.rw2', '.orf', '.srw',
   '.pef', '.x3f', '.iiq', '.rwl', '.raw',
 ])
+const SYSTEM_PATH_SEGMENTS = new Set(['System Volume Information', '$RECYCLE.BIN', '@eaDir'])
+const SYSTEM_FILE_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini'])
+
+interface CompiledFilter {
+  active: boolean
+  allows(entry: FileEntry): boolean
+}
+
+interface PatternMatcher {
+  pattern: string
+  matcher: (value: string) => boolean
+  basenameOnly: boolean
+}
+
+function compileJobFilter(job: Job): CompiledFilter {
+  const filters = job.filters ?? {}
+  const includeMatchers = compilePatterns(filters.include ?? [])
+  const excludeMatchers = compilePatterns(filters.exclude ?? [])
+  const maxBytes = filters.maxFileSizeMb && filters.maxFileSizeMb > 0
+    ? filters.maxFileSizeMb * 1024 * 1024
+    : undefined
+  const active = includeMatchers.length > 0
+    || excludeMatchers.length > 0
+    || Boolean(filters.excludeHidden)
+    || Boolean(filters.excludeSystem)
+    || maxBytes != null
+
+  return {
+    active,
+    allows(entry) {
+      const rel = normalizeRelativePath(entry.relativePath)
+      if (filters.excludeHidden && isHiddenPath(rel)) return false
+      if (filters.excludeSystem && isSystemPath(rel)) return false
+      if (!entry.isDirectory && maxBytes != null && entry.size > maxBytes) return false
+      if (matchesAny(excludeMatchers, rel)) return false
+      if (!entry.isDirectory && includeMatchers.length > 0 && !matchesAny(includeMatchers, rel)) return false
+      return true
+    },
+  }
+}
+
+function filterFileMap(job: Job, files: Map<string, FileEntry>): Map<string, FileEntry> {
+  const filter = compileJobFilter(job)
+  if (!filter.active) return files
+
+  const next = new Map<string, FileEntry>()
+  for (const [rel, entry] of files) {
+    if (filter.allows(entry)) next.set(rel, entry)
+  }
+  return next
+}
+
+function compilePatterns(patterns: string[]): PatternMatcher[] {
+  return patterns
+    .map((pattern) => pattern.trim())
+    .filter(Boolean)
+    .map((pattern) => ({
+      pattern,
+      matcher: picomatch(pattern, { dot: true, nocase: process.platform === 'win32' }),
+      basenameOnly: !/[\\/]/.test(pattern),
+    }))
+}
+
+function matchesAny(matchers: PatternMatcher[], relativePath: string): boolean {
+  const basename = path.posix.basename(relativePath)
+  return matchers.some(({ matcher, basenameOnly }) => matcher(relativePath) || (basenameOnly && matcher(basename)))
+}
+
+function normalizeRelativePath(relativePath: string): string {
+  return relativePath.split(path.sep).join('/').replace(/\\/g, '/')
+}
+
+function isHiddenPath(relativePath: string): boolean {
+  return relativePath.split('/').some((segment) => segment.startsWith('.') && segment.length > 1)
+}
+
+function isSystemPath(relativePath: string): boolean {
+  return relativePath.split('/').some((segment) => SYSTEM_PATH_SEGMENTS.has(segment) || SYSTEM_FILE_NAMES.has(segment))
+}
 
 // DST-aware mtime comparison: returns true if two timestamps represent the same file.
 // FAT32 has 2-second resolution; Windows also shifts mtime by exactly ±1h or ±2h on
@@ -226,11 +306,14 @@ export async function runImportSync(
     await dstBackend.mkdirp(dstPath)
 
     throwIfAborted(signal)
-    const srcFiles = await srcBackend.walk(srcPath)
+    const srcFiles = filterFileMap(job, await srcBackend.walk(srcPath))
     throwIfAborted(signal)
     const dstFiles = await dstBackend.walk(dstPath)
 
     const entries = [...srcFiles.values()].filter((e) => !e.isDirectory)
+    const destinationLayout = job.destinationLayout ?? 'byCaptureDate'
+    const dateSource = job.dateSource ?? 'exifThenMtime'
+    const collisionPolicy = job.collisionPolicy ?? 'skipSameErrorDifferent'
     let processed = 0
 
     for (const srcEntry of entries) {
@@ -253,13 +336,12 @@ export async function runImportSync(
 
       let targetRel = srcEntry.relativePath
       try {
-        const captureDate = await importCaptureDate(srcEntry, srcBackend)
-        targetRel = importRelativePath(captureDate, path.basename(srcEntry.relativePath))
+        targetRel = await importTargetRelativePath(srcEntry, srcBackend, destinationLayout, dateSource)
         const targetPath = joinRemote(dstPath, targetRel)
         const dstEntry = dstFiles.get(targetRel)
 
         if (dstEntry) {
-          if (dstEntry.size === srcEntry.size && mtimeEqual(dstEntry.mtimeMs, srcEntry.mtimeMs)) {
+          if (collisionPolicy === 'skipSameErrorDifferent' && dstEntry.size === srcEntry.size && mtimeEqual(dstEntry.mtimeMs, srcEntry.mtimeMs)) {
             result.filesSkipped++
             onFileDone?.({ relativePath: targetRel, isDirectory: false, action: 'skipped', size: srcEntry.size, mtimeMs: srcEntry.mtimeMs })
           } else {
@@ -302,7 +384,21 @@ export async function runImportSync(
   return result
 }
 
-async function importCaptureDate(entry: FileEntry, backend: StorageBackend): Promise<Date> {
+async function importTargetRelativePath(
+  entry: FileEntry,
+  backend: StorageBackend,
+  destinationLayout: NonNullable<Job['destinationLayout']>,
+  dateSource: NonNullable<Job['dateSource']>,
+): Promise<string> {
+  if (destinationLayout === 'sameTree') return normalizeRelativePath(entry.relativePath)
+
+  const captureDate = await importCaptureDate(entry, backend, dateSource)
+  return importCaptureDateRelativePath(captureDate, path.basename(entry.relativePath))
+}
+
+async function importCaptureDate(entry: FileEntry, backend: StorageBackend, dateSource: NonNullable<Job['dateSource']>): Promise<Date> {
+  if (dateSource === 'mtime') return new Date(entry.mtimeMs)
+
   const ext = path.extname(entry.relativePath).toLowerCase()
   if (IMPORT_EXIF_EXTENSIONS.has(ext)) {
     try {
@@ -346,7 +442,7 @@ async function readStreamPrefix(stream: NodeJS.ReadableStream, maxBytes: number)
   return Buffer.concat(chunks, total)
 }
 
-function importRelativePath(date: Date, filename: string): string {
+function importCaptureDateRelativePath(date: Date, filename: string): string {
   const yyyy = String(date.getFullYear())
   const mm = String(date.getMonth() + 1).padStart(2, '0')
   const dd = String(date.getDate()).padStart(2, '0')
@@ -509,9 +605,9 @@ async function syncOneWay(
   onFileDone?: (file: SyncFileEvent) => void,
 ) {
   throwIfAborted(signal)
-  const srcFiles = await srcBackend.walk(srcPath)
+  const srcFiles = filterFileMap(job, await srcBackend.walk(srcPath))
   throwIfAborted(signal)
-  const dstFiles = await dstBackend.walk(dstPath)
+  const dstFiles = filterFileMap(job, await dstBackend.walk(dstPath))
   const prevState = state.getJobState(job.id)
 
   for (const srcDir of entriesByDepth([...srcFiles.values()].filter((e) => e.isDirectory), 'shallow-first')) {
@@ -683,9 +779,9 @@ async function syncBidirectional(
   onFileDone?: (file: SyncFileEvent) => void,
 ) {
   throwIfAborted(signal)
-  const srcFiles  = await srcBackend.walk(srcPath)
+  const srcFiles  = filterFileMap(job, await srcBackend.walk(srcPath))
   throwIfAborted(signal)
-  const dstFiles  = await dstBackend.walk(dstPath)
+  const dstFiles  = filterFileMap(job, await dstBackend.walk(dstPath))
 
   const prevState     = state.getJobState(job.id)
   const newState      = new Map<string, StoredFileState>()

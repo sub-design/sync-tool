@@ -193,6 +193,41 @@ export default function JobsTable({ jobs, emptyMessage = 'No jobs.' }: Props) {
     }
   }
 
+  async function handleSaveAsTemplate(job: Job) {
+    try {
+      await api.createJobTemplate({
+        name: `${job.name} Template`,
+        description: `Created from job "${job.name}".`,
+        defaults: {
+          name: job.name,
+          source: job.source,
+          destination: job.destination,
+          direction: job.direction,
+          jobMode: job.jobMode,
+          transferMode: job.transferMode,
+          conflictStrategy: job.conflictStrategy,
+          deletionPolicy: job.deletionPolicy,
+          reliability: job.reliability,
+          filters: job.filters,
+          destinationLayout: job.destinationLayout,
+          dateSource: job.dateSource,
+          collisionPolicy: job.collisionPolicy,
+          sourceDeviceId: job.sourceDeviceId,
+          destinationDeviceId: job.destinationDeviceId,
+          sourceEndpointId: job.sourceEndpointId,
+          destinationEndpointId: job.destinationEndpointId,
+          watch: job.watch,
+          schedule: job.schedule,
+          autoOptions: job.autoOptions,
+        },
+      })
+      queryClient.invalidateQueries({ queryKey: ['job-templates'] })
+      toast.success('Template saved')
+    } catch {
+      toast.error('Failed to save template')
+    }
+  }
+
   async function handleBulkStart() {
     await Promise.allSettled([...selected].map(id => api.runJob(id)))
     queryClient.invalidateQueries({ queryKey: ['jobs'] })
@@ -333,6 +368,9 @@ export default function JobsTable({ jobs, emptyMessage = 'No jobs.' }: Props) {
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => navigate(`/jobs/${job.id}`)}>
                             View details
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSaveAsTemplate(job)}>
+                            Save as template
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
