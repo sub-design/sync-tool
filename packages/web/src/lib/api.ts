@@ -1,4 +1,4 @@
-import type { Job, DirEntry, AgentToken, AuditEntry, SyncLogFile, JobTemplate, Collection, CollectionTemplateLink, ApplyPreview, ApplyResult, CollectionUpdateResult } from '../types'
+import type { Job, DirEntry, AgentToken, AuditEntry, SyncLogFile, JobTemplate, Collection, CollectionTemplateLink, ApplyPreview, ApplyResult, CollectionUpdateResult, MembershipRule } from '../types'
 import { getToken, clearToken, getOrgId } from './auth'
 
 const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001'
@@ -101,7 +101,7 @@ export function getCollection(id: string): Promise<Collection> {
   return apiFetch(`/api/collections/${id}`)
 }
 
-export function createCollection(body: Pick<Collection, 'name' | 'description' | 'deviceIds'>): Promise<Collection> {
+export function createCollection(body: Partial<Pick<Collection, 'name' | 'description' | 'type' | 'deviceIds' | 'membershipRule'>>): Promise<Collection> {
   return apiFetch('/api/collections', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -111,7 +111,7 @@ export function createCollection(body: Pick<Collection, 'name' | 'description' |
 
 export function updateCollection(
   id: string,
-  body: Partial<Pick<Collection, 'name' | 'description' | 'deviceIds'>> & { deleteOrphanedJobs?: boolean },
+  body: Partial<Pick<Collection, 'name' | 'description' | 'type' | 'deviceIds' | 'membershipRule'>> & { deleteOrphanedJobs?: boolean },
 ): Promise<CollectionUpdateResult> {
   return apiFetch(`/api/collections/${id}`, {
     method: 'PATCH',
@@ -145,6 +145,14 @@ export function applyTemplateToCollection(
 
 export function unapplyTemplateFromCollection(collectionId: string, templateId: string): Promise<void> {
   return apiFetch(`/api/collections/${collectionId}/templates/${templateId}`, { method: 'DELETE' })
+}
+
+export function previewRule(membershipRule: MembershipRule): Promise<{ matchingCount: number; totalCount: number; devices: Array<{ id: string; name: string; tags?: Record<string, string> }> }> {
+  return apiFetch('/api/collections/preview-rule', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ membershipRule }),
+  })
 }
 
 export function getDerivedJobs(id: string): Promise<{ count: number; jobs: Job[] }> {
@@ -231,6 +239,46 @@ export function updateDeviceClient(id: string): Promise<{ ok: boolean; status: s
 
 export function restartDeviceAgent(id: string): Promise<{ ok: boolean; status: string; message: string }> {
   return apiFetch(`/api/devices/${id}/restart-agent`, { method: 'POST' })
+}
+
+export function batchDeleteDevices(ids: string[]): Promise<{ total: number; successful: number; failed: number; results: Array<{ id: string; ok: boolean }> }> {
+  return apiFetch('/api/devices/batch/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+}
+
+export function batchRotateDevices(ids: string[], expiresInDays?: number): Promise<{ total: number; successful: number; failed: number; results: Array<{ id: string; ok: boolean }> }> {
+  return apiFetch('/api/devices/batch/rotate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids, expiresInDays }),
+  })
+}
+
+export function batchTestDeviceConnections(ids: string[]): Promise<{ total: number; successful: number; failed: number; results: Array<{ id: string; ok: boolean; status: string; message: string }> }> {
+  return apiFetch('/api/devices/batch/test-connection', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+}
+
+export function batchUpdateDeviceClients(ids: string[]): Promise<{ total: number; successful: number; failed: number; results: Array<{ id: string; ok: boolean; status: string; message: string }> }> {
+  return apiFetch('/api/devices/batch/update-client', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+}
+
+export function batchRestartDeviceAgents(ids: string[]): Promise<{ total: number; successful: number; failed: number; results: Array<{ id: string; ok: boolean; status: string; message: string }> }> {
+  return apiFetch('/api/devices/batch/restart-agent', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
 }
 
 export function browseDir(deviceId: string, path: string): Promise<{ path: string; entries: DirEntry[] }> {

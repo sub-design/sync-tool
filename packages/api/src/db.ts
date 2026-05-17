@@ -1,6 +1,6 @@
 import postgres from 'postgres'
 import { v4 as uuid } from 'uuid'
-import type { Job, Endpoint, SavedEndpointConfig, Organization, Membership, OrgRole, SyncResult, RollbackManifest, RollbackResult, JobTemplate, JobTemplateDefaults, Collection, CollectionTemplate } from '@sync-tool/shared'
+import type { Job, Endpoint, SavedEndpointConfig, Organization, Membership, OrgRole, SyncResult, RollbackManifest, RollbackResult, JobTemplate, JobTemplateDefaults, Collection, CollectionTemplate, CollectionType, DeviceTags } from '@sync-tool/shared'
 
 // ── Connection ────────────────────────────────────────────────────────────────
 
@@ -118,14 +118,16 @@ export async function initDb(): Promise<void> {
 
   await sql`
     CREATE TABLE IF NOT EXISTS collections (
-      id          TEXT   PRIMARY KEY,
-      user_id     TEXT   REFERENCES users(id) ON DELETE CASCADE,
-      org_id      TEXT   REFERENCES organizations(id) ON DELETE CASCADE,
-      name        TEXT   NOT NULL,
-      description TEXT,
-      device_ids  TEXT   NOT NULL DEFAULT '[]',
-      created_at  BIGINT NOT NULL,
-      updated_at  BIGINT NOT NULL
+      id               TEXT   PRIMARY KEY,
+      user_id          TEXT   REFERENCES users(id) ON DELETE CASCADE,
+      org_id           TEXT   REFERENCES organizations(id) ON DELETE CASCADE,
+      name             TEXT   NOT NULL,
+      description      TEXT,
+      type             TEXT   NOT NULL DEFAULT 'static',
+      device_ids       TEXT   DEFAULT '[]',
+      membership_rule  TEXT   DEFAULT '{}',
+      created_at       BIGINT NOT NULL,
+      updated_at       BIGINT NOT NULL
     )
   `
 
@@ -251,6 +253,9 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS agent_version TEXT`,
     `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS last_seen BIGINT`,
     `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'offline'`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS tags TEXT DEFAULT '{}'`,
+    `ALTER TABLE collections ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'static'`,
+    `ALTER TABLE collections ADD COLUMN IF NOT EXISTS membership_rule TEXT DEFAULT '{}'`,
   ]) {
     await sql.unsafe(stmt)
   }
@@ -434,16 +439,16 @@ export const usersDb = {
     return { userId: row.user_id as string, orgId: (row.org_id as string) ?? undefined }
   },
 
-  async getDevice(id: string, orgId?: string): Promise<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number; os?: string; hostname?: string; ipAddress?: string; agentVersion?: string; lastSeen?: number; status?: string } | undefined> {
+  async getDevice(id: string, orgId?: string): Promise<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number; os?: string; hostname?: string; ipAddress?: string; agentVersion?: string; lastSeen?: number; status?: string; tags?: DeviceTags } | undefined> {
     const rows = orgId
       ? await sql`
-          SELECT id, name, created_at, expires_at, last_used_at, os, hostname, ip_address, agent_version, last_seen, status
+          SELECT id, name, created_at, expires_at, last_used_at, os, hostname, ip_address, agent_version, last_seen, status, tags
           FROM agent_tokens
           WHERE id = ${id} AND org_id = ${orgId} AND revoked_at IS NULL
           LIMIT 1
         `
       : await sql`
-          SELECT id, name, created_at, expires_at, last_used_at, os, hostname, ip_address, agent_version, last_seen, status
+          SELECT id, name, created_at, expires_at, last_used_at, os, hostname, ip_address, agent_version, last_seen, status, tags
           FROM agent_tokens
           WHERE id = ${id} AND revoked_at IS NULL
           LIMIT 1
@@ -462,6 +467,7 @@ export const usersDb = {
       agentVersion: row.agent_version as string ?? undefined,
       lastSeen:     row.last_seen != null ? Number(row.last_seen) : undefined,
       status:       row.status as string ?? 'offline',
+      tags:         parseDeviceTags(row.tags as string),
     }
   },
 
@@ -792,14 +798,37 @@ export const jobTemplatesDb = {
 // ── Collections ──────────────────────────────────────────────────────────────
 
 function rowToCollection(row: Record<string, unknown>): Collection {
+  const type = (row.type as string) ?? 'static'
   return {
-    id:          row.id as string,
-    orgId:       (row.org_id as string) ?? undefined,
-    name:        row.name as string,
-    description: (row.description as string) ?? undefined,
-    deviceIds:   JSON.parse((row.device_ids as string) || '[]') as string[],
-    createdAt:   Number(row.created_at),
-    updatedAt:   Number(row.updated_at),
+    id:              row.id as string,
+    orgId:           (row.org_id as string) ?? undefined,
+    name:            row.name as string,
+    description:     (row.description as string) ?? undefined,
+    type:            (type === 'dynamic' ? 'dynamic' : 'static') as CollectionType,
+    deviceIds:       JSON.parse((row.device_ids as string) || '[]') as string[],
+    membershipRule:  parseMembershipRule(row.membership_rule as string),
+    createdAt:       Number(row.created_at),
+    updatedAt:       Number(row.updated_at),
+  }
+}
+
+function parseMembershipRule(value: unknown): Collection['membershipRule'] {
+  if (!value || typeof value !== 'string') return undefined
+  try {
+    const p = JSON.parse(value);
+    return p && typeof p === 'object' && p.query && p.description ? p : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function parseDeviceTags(value: unknown): DeviceTags | undefined {
+  if (!value || typeof value !== 'string') return undefined
+  try {
+    const p = JSON.parse(value);
+    return p && typeof p === 'object' ? p : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -818,27 +847,31 @@ export const collectionsDb = {
     const now = Date.now()
     const collection: Collection = { ...input, orgId, createdAt: now, updatedAt: now }
     await sql`
-      INSERT INTO collections (id, user_id, org_id, name, description, device_ids, created_at, updated_at)
+      INSERT INTO collections (id, user_id, org_id, name, description, type, device_ids, membership_rule, created_at, updated_at)
       VALUES (
         ${collection.id}, ${userId}, ${orgId},
         ${collection.name}, ${collection.description ?? null},
+        ${collection.type ?? 'static'},
         ${JSON.stringify(collection.deviceIds ?? [])},
+        ${JSON.stringify(collection.membershipRule ?? {})},
         ${now}, ${now}
       )
     `
     return collection
   },
 
-  async update(id: string, patch: Partial<Pick<Collection, 'name' | 'description' | 'deviceIds'>>): Promise<Collection | undefined> {
+  async update(id: string, patch: Partial<Pick<Collection, 'name' | 'description' | 'deviceIds' | 'type' | 'membershipRule'>>): Promise<Collection | undefined> {
     const existing = await collectionsDb.get(id)
     if (!existing) return undefined
     const updated: Collection = { ...existing, ...patch, updatedAt: Date.now() }
     await sql`
       UPDATE collections SET
-        name        = ${updated.name},
-        description = ${updated.description ?? null},
-        device_ids  = ${JSON.stringify(updated.deviceIds ?? [])},
-        updated_at  = ${updated.updatedAt}
+        name            = ${updated.name},
+        description     = ${updated.description ?? null},
+        type            = ${updated.type},
+        device_ids      = ${JSON.stringify(updated.deviceIds ?? [])},
+        membership_rule = ${JSON.stringify(updated.membershipRule ?? {})},
+        updated_at      = ${updated.updatedAt}
       WHERE id = ${id}
     `
     return updated

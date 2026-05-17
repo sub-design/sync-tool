@@ -16,6 +16,8 @@ import {
   DialogFooter,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { RuleBuilder, type RuleCondition, buildRuleQuery, parseRuleQuery } from '@/components/RuleBuilder'
+import { RuleLivePreview } from '@/components/RuleLivePreview'
 import { formatRelative } from '@/lib/format'
 import * as api from '@/lib/api'
 import type { Collection, AgentToken, JobTemplate, CollectionTemplateLink, Job } from '@/types'
@@ -56,7 +58,9 @@ export default function CollectionDetail() {
   )
 
   const memberDevices = useMemo(
-    () => devices.filter((d) => collection?.deviceIds.includes(d.id)),
+    () => collection?.type === 'static'
+      ? devices.filter((d) => (collection.deviceIds ?? []).includes(d.id))
+      : [], // Dynamic collections don't have deviceIds, membership is computed by rules
     [devices, collection],
   )
 
@@ -116,7 +120,7 @@ export default function CollectionDetail() {
               <div>
                 <h1 className="text-xl font-semibold tracking-tight">{collection.name}</h1>
                 <p className="text-sm text-muted-foreground mt-0.5">
-                  Static · {collection.deviceIds.length} device{collection.deviceIds.length !== 1 ? 's' : ''} · {applied.length} template{applied.length !== 1 ? 's' : ''} applied
+                  {collection.type === 'static' ? 'Static' : 'Dynamic'} · {collection.type === 'static' ? `${collection.deviceIds?.length ?? 0} device${(collection.deviceIds?.length ?? 0) !== 1 ? 's' : ''}` : 'Rule-based membership'} · {applied.length} template{applied.length !== 1 ? 's' : ''} applied
                 </p>
                 {collection.description && (
                   <p className="text-sm text-muted-foreground mt-1">{collection.description}</p>
@@ -216,29 +220,44 @@ export default function CollectionDetail() {
         <section className="space-y-2">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Devices ({memberDevices.length})
+              {collection.type === 'static' ? `Devices (${memberDevices.length})` : 'Membership'}
             </h2>
             <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditing(true)}>
               <Pencil className="size-3.5" /> Manage
             </Button>
           </div>
-          {memberDevices.length === 0 ? (
-            <div className="rounded-lg border border-dashed py-8 px-6 text-center">
-              <p className="text-sm text-muted-foreground">No devices in this collection.</p>
-              <Button className="mt-3" size="sm" variant="outline" onClick={() => setEditing(true)}>
-                Add devices
-              </Button>
-            </div>
+          {collection.type === 'static' ? (
+            memberDevices.length === 0 ? (
+              <div className="rounded-lg border border-dashed py-8 px-6 text-center">
+                <p className="text-sm text-muted-foreground">No devices in this collection.</p>
+                <Button className="mt-3" size="sm" variant="outline" onClick={() => setEditing(true)}>
+                  Add devices
+                </Button>
+              </div>
+            ) : (
+              <ul className="rounded-lg border divide-y">
+                {memberDevices.map((d) => (
+                  <li key={d.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
+                    <HardDrive className="size-4 text-muted-foreground shrink-0" />
+                    <span className="flex-1 truncate">{d.name}</span>
+                    <span className="text-xs text-muted-foreground font-mono">{d.id.slice(0, 8)}</span>
+                  </li>
+                ))}
+              </ul>
+            )
           ) : (
-            <ul className="rounded-lg border divide-y">
-              {memberDevices.map((d) => (
-                <li key={d.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
-                  <HardDrive className="size-4 text-muted-foreground shrink-0" />
-                  <span className="flex-1 truncate">{d.name}</span>
-                  <span className="text-xs text-muted-foreground font-mono">{d.id.slice(0, 8)}</span>
-                </li>
-              ))}
-            </ul>
+            <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+              <div className="text-sm">
+                <span className="font-medium">Rule:</span> {collection.membershipRule?.description || 'Custom rule'}
+              </div>
+              <div className="text-xs text-muted-foreground font-mono bg-background p-2 rounded">
+                {collection.membershipRule?.query || 'No rule defined'}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">Preview</Label>
+                <RuleLivePreview conditions={collection.membershipRule ? parseRuleQuery(collection.membershipRule.query) : []} membershipRule={collection.membershipRule} />
+              </div>
+            </div>
           )}
         </section>
 
@@ -334,19 +353,24 @@ function EditCollectionDialog({
   const queryClient = useQueryClient()
   const [name, setName] = useState(collection.name)
   const [description, setDescription] = useState(collection.description ?? '')
-  const [deviceIds, setDeviceIds] = useState<string[]>(collection.deviceIds)
+  const [deviceIds, setDeviceIds] = useState<string[]>(collection.deviceIds ?? [])
+  const [ruleConditions, setRuleConditions] = useState<RuleCondition[]>(
+    collection.membershipRule ? parseRuleQuery(collection.membershipRule.query) : []
+  )
   const [step, setStep] = useState<'edit' | 'orphan-confirm'>('edit')
 
-  // Compute removed devices and their orphaned jobs
+  // Compute removed devices and their orphaned jobs (only for static collections)
   const removedDeviceIds = useMemo(() => {
+    if (collection.type !== 'static') return []
     const next = new Set(deviceIds)
-    return collection.deviceIds.filter((id) => !next.has(id))
-  }, [collection.deviceIds, deviceIds])
+    return (collection.deviceIds ?? []).filter((id) => !next.has(id))
+  }, [collection.deviceIds, deviceIds, collection.type])
 
   const addedDeviceCount = useMemo(() => {
-    const prev = new Set(collection.deviceIds)
+    if (collection.type !== 'static') return 0
+    const prev = new Set(collection.deviceIds ?? [])
     return deviceIds.filter((id) => !prev.has(id)).length
-  }, [collection.deviceIds, deviceIds])
+  }, [collection.deviceIds, deviceIds, collection.type])
 
   const orphanedJobs = useMemo(
     () => derivedJobs.filter((j) => j.sourceDeviceId && removedDeviceIds.includes(j.sourceDeviceId)),
@@ -357,7 +381,12 @@ function EditCollectionDialog({
     mutationFn: (deleteOrphanedJobs: boolean) => api.updateCollection(collection.id, {
       name: name.trim(),
       description: description.trim() || undefined,
-      deviceIds,
+      type: collection.type,
+      deviceIds: collection.type === 'static' ? deviceIds : undefined,
+      membershipRule: collection.type === 'dynamic' ? {
+        query: buildRuleQuery(ruleConditions),
+        description: 'Custom rule',
+      } : undefined,
       deleteOrphanedJobs,
     }),
     onSuccess: (result) => {
@@ -419,7 +448,7 @@ function EditCollectionDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl">
         <DialogTitle>Edit collection</DialogTitle>
         <div className="grid gap-4">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -432,12 +461,27 @@ function EditCollectionDialog({
               <Textarea id="col-edit-description" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
             </div>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>Devices</Label>
-            <DeviceCheckboxList selected={deviceIds} onChange={setDeviceIds} />
-            <p className="text-xs text-muted-foreground">{deviceIds.length} selected</p>
-          </div>
-          {(addedDeviceCount > 0 || orphanedJobs.length > 0) && (
+
+          {collection.type === 'static' ? (
+            <div className="flex flex-col gap-1.5">
+              <Label>Devices</Label>
+              <DeviceCheckboxList selected={deviceIds} onChange={setDeviceIds} />
+              <p className="text-xs text-muted-foreground">{deviceIds.length} selected</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label>Membership rules</Label>
+                <RuleBuilder conditions={ruleConditions} onChange={setRuleConditions} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>Preview</Label>
+                <RuleLivePreview conditions={ruleConditions} membershipRule={collection.membershipRule} />
+              </div>
+            </div>
+          )}
+
+          {collection.type === 'static' && (addedDeviceCount > 0 || orphanedJobs.length > 0) && (
             <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-1">
               <div className="font-medium text-sm mb-1">Impact on existing jobs</div>
               {addedDeviceCount > 0 && (

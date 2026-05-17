@@ -3,19 +3,52 @@ import { v4 as uuid } from 'uuid'
 import { collectionsDb, collectionTemplatesDb, jobTemplatesDb, jobsDb, usersDb } from '../db'
 import { requireAuth } from '../middleware/requireAuth'
 import { auditRequest } from '../audit'
-import type { Job, JobTemplate } from '@sync-tool/shared'
+import { evaluateRule, parseRuleQuery, buildRuleQuery } from '../ruleEvaluator'
+import type { Job, JobTemplate, CollectionType, MembershipRule, DeviceTags } from '@sync-tool/shared'
 
-// Replaces {DeviceName} and {DeviceId} variables with actual values.
-function resolveDeviceVars(path: string, device: { id: string; name: string }): string {
-  return path
-    .replace(/\{DeviceName\}/g, device.name)
-    .replace(/\{DeviceId\}/g, device.id)
+// Replaces device-scoped variables and leaves agent-scoped variables for the agent.
+function resolveDeviceVars(input: string, device: { id: string; name: string; tags?: DeviceTags }): string {
+  return input.replace(/\{([A-Za-z][A-Za-z0-9_.:-]*)\}/g, (match, rawName: string) => {
+    const name = rawName.toLowerCase()
+    if (name === 'devicename') return device.name
+    if (name === 'deviceid') return device.id
+
+    const tagValue = device.tags?.[rawName] ?? device.tags?.[name]
+    return tagValue ?? match
+  })
+}
+
+// Get device IDs for a collection (static or dynamic)
+async function getCollectionDeviceIds(
+  collection: { id: string; type: CollectionType; deviceIds?: string[]; membershipRule?: MembershipRule },
+  userId: string,
+  orgId: string,
+): Promise<string[]> {
+  if (collection.type === 'static') {
+    return collection.deviceIds ?? []
+  }
+
+  // Dynamic collection: evaluate rule against all devices
+  const allDevices = await usersDb.listTokens(userId, orgId)
+  const matchingIds: string[] = []
+
+  for (const device of allDevices) {
+    // Get device tags from database (stored in tags field)
+    const deviceRecord = await usersDb.getDevice(device.id, orgId)
+    if (deviceRecord && deviceRecord.tags) {
+      if (evaluateRule(collection.membershipRule, deviceRecord.tags)) {
+        matchingIds.push(device.id)
+      }
+    }
+  }
+
+  return matchingIds
 }
 
 // Build a job to create for a single device, applying template defaults + apply-time overrides.
 function buildJobForDevice(
   template: JobTemplate,
-  device: { id: string; name: string },
+  device: { id: string; name: string; tags?: DeviceTags },
   source: string,
   destination: string,
   collectionId: string,
@@ -64,15 +97,47 @@ export function createCollectionsRouter(): ExpressRouter {
     res.json(collection)
   })
 
+  // Preview rule evaluation for dynamic collections
+  router.post('/preview-rule', async (req, res) => {
+    const { membershipRule } = req.body ?? {}
+    if (!membershipRule || !membershipRule.query) {
+      res.status(400).json({ error: 'membershipRule with query is required' }); return
+    }
+
+    const allDevices = await usersDb.listTokens(req.userId, req.orgId)
+    const matchingDevices: Array<{ id: string; name: string; tags?: DeviceTags }> = []
+
+    for (const device of allDevices) {
+      const deviceRecord = await usersDb.getDevice(device.id, req.orgId)
+      if (deviceRecord && deviceRecord.tags) {
+        if (evaluateRule(membershipRule, deviceRecord.tags)) {
+          matchingDevices.push({
+            id: deviceRecord.id,
+            name: deviceRecord.name,
+            tags: deviceRecord.tags,
+          })
+        }
+      }
+    }
+
+    res.json({
+      matchingCount: matchingDevices.length,
+      totalCount: allDevices.length,
+      devices: matchingDevices,
+    })
+  })
+
   router.post('/', async (req, res) => {
-    const { name, description, deviceIds = [] } = req.body ?? {}
+    const { name, description, type = 'static', deviceIds = [], membershipRule } = req.body ?? {}
     if (!name) { res.status(400).json({ error: 'name is required' }); return }
 
     const collection = await collectionsDb.create({
       id: uuid(),
       name,
       description: description || undefined,
-      deviceIds,
+      type: type as CollectionType,
+      deviceIds: type === 'static' ? deviceIds : undefined,
+      membershipRule: type === 'dynamic' ? membershipRule : undefined,
     }, req.userId, req.orgId)
 
     auditRequest(req, 'collection.created', {
@@ -89,19 +154,36 @@ export function createCollectionsRouter(): ExpressRouter {
       res.status(404).json({ error: 'Collection not found' }); return
     }
 
-    const { name, description, deviceIds, deleteOrphanedJobs } = req.body ?? {}
+    const { name, description, type, deviceIds, membershipRule, deleteOrphanedJobs } = req.body ?? {}
 
-    // Compute device diff before update (only matters if deviceIds is part of the patch)
+    // Compute device diff before update
     const addedDeviceIds:   string[] = []
     const removedDeviceIds: string[] = []
-    if (Array.isArray(deviceIds)) {
-      const prev = new Set(existing.deviceIds)
+
+    if (existing.type === 'static' && Array.isArray(deviceIds)) {
+      const prev = new Set(existing.deviceIds ?? [])
       const next = new Set<string>(deviceIds)
       for (const id of next) if (!prev.has(id)) addedDeviceIds.push(id)
       for (const id of prev) if (!next.has(id)) removedDeviceIds.push(id)
+    } else if (existing.type === 'dynamic' && membershipRule) {
+      // For dynamic collections, compute membership delta from rule changes
+      const prevDeviceIds = await getCollectionDeviceIds(existing, req.userId, req.orgId)
+      const newRule = membershipRule
+      const newDeviceIds = await getCollectionDeviceIds({ ...existing, membershipRule: newRule }, req.userId, req.orgId)
+
+      const prevSet = new Set(prevDeviceIds)
+      const newSet = new Set(newDeviceIds)
+      for (const id of newSet) if (!prevSet.has(id)) addedDeviceIds.push(id)
+      for (const id of prevSet) if (!newSet.has(id)) removedDeviceIds.push(id)
     }
 
-    const collection = await collectionsDb.update(req.params.id, { name, description, deviceIds })
+    const collection = await collectionsDb.update(req.params.id, {
+      name,
+      description,
+      type: type as CollectionType,
+      deviceIds: type === 'static' ? deviceIds : undefined,
+      membershipRule: type === 'dynamic' ? membershipRule : undefined,
+    })
     if (!collection) { res.status(404).json({ error: 'Collection not found' }); return }
 
     // Phase 4C propagation
@@ -175,9 +257,10 @@ export function createCollectionsRouter(): ExpressRouter {
       res.status(404).json({ error: 'Template not found' }); return
     }
 
+    const deviceIds = await getCollectionDeviceIds(collection, req.userId, req.orgId)
     const devices = await Promise.all(
-      collection.deviceIds.map(async (did) => {
-        const device  = await usersDb.getTokenForOrg(did, req.orgId)
+      deviceIds.map(async (did) => {
+        const device  = await usersDb.getDevice(did, req.orgId)
         if (!device) return null
         const existing = await jobsDb.findByCollectionTemplateDevice(collection.id, templateId, did)
         return { id: device.id, name: device.name, jobExists: Boolean(existing) }
@@ -216,8 +299,9 @@ export function createCollectionsRouter(): ExpressRouter {
 
     let created = 0, skipped = 0
     const createdJobs: Job[] = []
-    for (const deviceId of collection.deviceIds) {
-      const device = await usersDb.getTokenForOrg(deviceId, req.orgId)
+    const deviceIds = await getCollectionDeviceIds(collection, req.userId, req.orgId)
+    for (const deviceId of deviceIds) {
+      const device = await usersDb.getDevice(deviceId, req.orgId)
       if (!device) { skipped++; continue }
 
       const existing = await jobsDb.findByCollectionTemplateDevice(collection.id, templateId, deviceId)

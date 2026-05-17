@@ -8,15 +8,18 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { RuleBuilder, type RuleCondition, buildRuleQuery } from '@/components/RuleBuilder'
+import { RuleLivePreview } from '@/components/RuleLivePreview'
 import { formatRelative } from '@/lib/format'
 import * as api from '@/lib/api'
-import type { AgentToken } from '@/types'
+import type { AgentToken, CollectionType } from '@/types'
 
 export default function Collections() {
   const queryClient = useQueryClient()
@@ -169,26 +172,37 @@ function CreateCollectionDialog({
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [type, setType] = useState<CollectionType>('static')
   const [deviceIds, setDeviceIds] = useState<string[]>([])
+  const [ruleConditions, setRuleConditions] = useState<RuleCondition[]>([])
 
   const create = useMutation({
     mutationFn: () => api.createCollection({
       name: name.trim(),
       description: description.trim() || undefined,
-      deviceIds,
+      type,
+      deviceIds: type === 'static' ? deviceIds : undefined,
+      membershipRule: type === 'dynamic' ? {
+        query: buildRuleQuery(ruleConditions),
+        description: 'Custom rule',
+      } : undefined,
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['collections'] })
       onOpenChange(false)
-      setName(''); setDescription(''); setDeviceIds([])
+      setName(''); setDescription(''); setDeviceIds([]); setRuleConditions([]); setType('static')
       toast.success('Collection created')
     },
     onError: () => toast.error('Failed to create collection'),
   })
 
+  const isValid = name.trim() && (
+    type === 'static' ? deviceIds.length > 0 : ruleConditions.length > 0
+  )
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl">
         <DialogTitle>New collection</DialogTitle>
         <div className="grid gap-4">
           <div className="grid gap-3 sm:grid-cols-2">
@@ -212,11 +226,43 @@ function CreateCollectionDialog({
               />
             </div>
           </div>
+
           <div className="flex flex-col gap-1.5">
-            <Label>Devices</Label>
-            <DeviceCheckboxList selected={deviceIds} onChange={setDeviceIds} />
-            <p className="text-xs text-muted-foreground">{deviceIds.length} selected</p>
+            <Label>Membership type</Label>
+            <RadioGroup value={type} onValueChange={(value) => setType(value as CollectionType)}>
+              <div className="flex items-center space-x-2">
+                <RadioGroupItem value="static" id="static" />
+                <Label htmlFor="static" className="font-normal">
+                  Static — manually select devices
+                </Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <RadioGroupItem value="dynamic" id="dynamic" />
+                <Label htmlFor="dynamic" className="font-normal">
+                  Dynamic — use rules to match devices by tags
+                </Label>
+              </div>
+            </RadioGroup>
           </div>
+
+          {type === 'static' ? (
+            <div className="flex flex-col gap-1.5">
+              <Label>Devices</Label>
+              <DeviceCheckboxList selected={deviceIds} onChange={setDeviceIds} />
+              <p className="text-xs text-muted-foreground">{deviceIds.length} selected</p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <Label>Membership rules</Label>
+                <RuleBuilder conditions={ruleConditions} onChange={setRuleConditions} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>Preview</Label>
+                <RuleLivePreview conditions={ruleConditions} />
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
@@ -224,7 +270,7 @@ function CreateCollectionDialog({
           </Button>
           <Button
             type="button"
-            disabled={!name.trim() || create.isPending}
+            disabled={!isValid || create.isPending}
             onClick={() => create.mutate()}
           >
             {create.isPending ? 'Creating…' : 'Create collection'}
