@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Job Auto Run Settings — wireframes</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Caveat:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #f0eee9; font-family: 'Inter', -apple-system, system-ui, sans-serif; }
+    #root { width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="shared.jsx"></script>
+  <script type="text/babel" src="schedule-builder.jsx"></script>
+  <script type="text/babel" src="direction-a.jsx"></script>
+  <script type="text/babel" src="direction-b.jsx"></script>
+  <script type="text/babel" src="direction-c.jsx"></script>
+  <script type="text/babel" src="direction-d.jsx"></script>
+
+  <script type="text/babel">
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "accent": "#2563eb",
+      "showPreview": true
+    }/*EDITMODE-END*/;
+
+    function App() {
+      const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+      const ctxValue = React.useMemo(() => ({
+        accent: t.accent,
+        showPreview: t.showPreview,
+      }), [t.accent, t.showPreview]);
+
+      // 4 artboards laid out side-by-side on the canvas.
+      // Each is a 720×900 frame containing the modal floating over a faint job-list.
+      return (
+        <WFCtx.Provider value={ctxValue}>
+          <DesignCanvas>
+            <DCSection
+              id="auto-run"
+              title="Auto Run Settings — 4 directions"
+              subtitle="Modal dialog over the job list. Higher-fi wireframes. Real text + real controls, grayscale + one warm accent."
+            >
+              <DCArtboard id="dirA" label="A · Trigger list" width={720} height={900}>
+                <DirectionA />
+              </DCArtboard>
+              <DCArtboard id="dirB" label="B · Trigger cards" width={720} height={900}>
+                <DirectionB />
+              </DCArtboard>
+              <DCArtboard id="dirC" label="C · Plain-language wizard" width={720} height={900}>
+                <DirectionC />
+              </DCArtboard>
+              <DCArtboard id="dirD" label="D · Settings shell + Schedule" width={1040} height={920}>
+                <DirectionD />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="notes"
+              title="Reading the wireframes"
+              subtitle="Shared conventions across all four"
+            >
+              <DCArtboard id="legend" label="Legend & status states" width={720} height={520}>
+                <Legend />
+              </DCArtboard>
+            </DCSection>
+          </DesignCanvas>
+
+          <TweaksPanel title="Tweaks">
+            <TweakSection label="Preview" />
+            <TweakToggle label="Show 'next runs' preview" value={t.showPreview}
+              onChange={v => setTweak('showPreview', v)} />
+            <TweakSection label="Accent" />
+            <TweakColor label="Accent color" value={t.accent}
+              options={['#2563eb', '#c2410c', '#15803d', '#7c3aed', '#1f1d1b']}
+              onChange={v => setTweak('accent', v)} />
+          </TweaksPanel>
+        </WFCtx.Provider>
+      );
+    }
+
+    function Legend() {
+      return (
+        <div style={{
+          padding: 24, background: '#fafaf7', height: '100%',
+          fontFamily: 'Inter, sans-serif', color: '#1f1d1b',
+          boxSizing: 'border-box',
+        }}>
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 14 }}>Wireframe conventions</div>
+
+          <Row label="Live & enforced">
+            <Badge tone="live">Live</Badge>
+            <span style={{ fontSize: 12, color: '#5a5550' }}>backend runtime supports this today</span>
+          </Row>
+
+          <Row label="Schedule (was cron)">
+            <Badge tone="live">Friendly</Badge>
+            <span style={{ fontSize: 12, color: '#5a5550' }}>frequency tabs hide cron entirely; “Show as cron” is the power-user escape hatch</span>
+          </Row>
+
+          <Row label="Limited by path type">
+            <Badge tone="warn">Local only</Badge>
+            <span style={{ fontSize: 12, color: '#5a5550' }}>e.g. file-watch on sftp:// destinations</span>
+          </Row>
+
+          <Row label="Agent offline / state">
+            <StateRow tone="warn" icon="⚠">Banner-style — appears on triggers that depend on the agent.</StateRow>
+          </Row>
+
+          <Row label="Invalid cron">
+            <StateRow tone="danger" icon="✕">Inline next to the cron input. Save button disables.</StateRow>
+          </Row>
+
+          <Row label="Job already running/queued">
+            <StateRow tone="info" icon="ℹ">Periodic & cron ticks are silently skipped, not errored.</StateRow>
+          </Row>
+
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #e8e2da', fontSize: 12, color: '#5a5550', lineHeight: 1.6 }}>
+            <b style={{ color: '#1f1d1b' }}>Manual run</b> lives on every direction — it's a primary affordance, not buried inside auto settings.
+            All four directions assume the dialog is opened from the job's row in the list, and Save persists the
+            <code style={{ background: '#f3efe8', padding: '1px 5px', borderRadius: 3, fontSize: 11, margin: '0 3px' }}>watch / schedule / autoOptions</code>
+            fields atomically.
+          </div>
+        </div>
+      );
+    }
+
+    function Row({ label, children }) {
+      return (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 14,
+          padding: '10px 0', borderBottom: '1px solid #e8e2da',
+        }}>
+          <div style={{ width: 170, fontSize: 12, fontWeight: 500, color: '#5a5550', flex: '0 0 auto' }}>{label}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flex: 1 }}>{children}</div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

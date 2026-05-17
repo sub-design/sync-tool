@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ArrowLeftRight, ArrowRight, Clock, Loader2, Play } from 'lucide-react'
+import { ArrowLeft, ArrowLeftRight, ArrowRight, Clock, Images, Loader2, Play } from 'lucide-react'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -36,7 +36,9 @@ export default function JobCard({ job }: { job: Job }) {
     queryClient.invalidateQueries({ queryKey: ['jobs'] })
   }
 
-  const { label, Icon } = directionConfig[job.direction]
+  const { label, Icon } = job.jobMode === 'import'
+    ? { label: 'Import', Icon: Images }
+    : directionConfig[job.direction]
   const isActive = job.status === 'running' || job.status === 'queued'
 
   return (
@@ -60,7 +62,7 @@ export default function JobCard({ job }: { job: Job }) {
               <Icon className="size-3" />
               {label}
             </Badge>
-            {job.direction !== 'bidir' && (
+            {job.jobMode !== 'import' && job.direction !== 'bidir' && (
               <Badge variant="secondary">
                 {deletionPolicyLabel[job.deletionPolicy ?? 'backup']}
               </Badge>

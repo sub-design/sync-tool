@@ -9,6 +9,8 @@ import { createAuthRouter } from './routes/auth'
 import { createDevicesRouter } from './routes/devices'
 import { createAuditRouter } from './routes/audit'
 import { createEndpointsRouter } from './routes/endpoints'
+import { createJobTemplatesRouter } from './routes/jobTemplates'
+import { createCollectionsRouter } from './routes/collections'
 import { createOrgsRouter } from './routes/orgs'
 import { createAnalyticsRouter } from './routes/analytics'
 import { authFromWsRequest, requireAuth } from './middleware/requireAuth'
@@ -121,6 +123,10 @@ function wsRateLimitAddress(req: http.IncomingMessage): string {
   const forwarded = req.headers['x-forwarded-for']
   const firstForwarded = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0]
   return (firstForwarded || req.socket.remoteAddress || 'unknown').trim()
+}
+
+function toIntegerMs(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : null
 }
 
 // ── Agent registry ────────────────────────────────────────────────────────────
@@ -260,7 +266,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
           is_directory:  msg.file.isDirectory,
           action:        msg.file.action,
           size:          msg.file.size,
-          mtime_ms:      msg.file.mtimeMs,
+          mtime_ms:      toIntegerMs(msg.file.mtimeMs),
           error_msg:     msg.file.errorMsg ?? null,
         })
         inFlightFiles.set(msg.jobId, buf)
@@ -436,6 +442,8 @@ app.use('/api/analytics', createAnalyticsRouter())
 app.use('/api/devices',   createDevicesRouter())
 app.use('/api/audit',     createAuditRouter())
 app.use('/api/endpoints', createEndpointsRouter())
+app.use('/api/job-templates', createJobTemplatesRouter())
+app.use('/api/collections',  createCollectionsRouter())
 app.use('/api/jobs',    createJobsRouter(
   async (msg) => {
     if (msg.type === 'job:run')    await queueJob(msg.job, 'manual')

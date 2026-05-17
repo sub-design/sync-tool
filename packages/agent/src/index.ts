@@ -5,7 +5,7 @@ import path from 'path'
 import { WebSocket } from 'ws'
 import { v4 as uuid } from 'uuid'
 import pLimit from 'p-limit'
-import { runSync, performRollback } from './sync'
+import { runSync, runImportSync, performRollback } from './sync'
 import type { SyncFileEvent } from '@sync-tool/shared'
 import { resolveBackend } from './backends/resolve'
 import { assertAllowedLocalEndpoint, assertAllowedPath } from './fileGuard'
@@ -199,6 +199,10 @@ async function executeJob(ws: WebSocket, job: Job) {
 }
 
 async function runJob(job: Job, onProgress: (progress: any) => void, signal: AbortSignal, onFileDone?: (file: SyncFileEvent) => void) {
+  if (job.jobMode === 'import') {
+    return runLocalSync(job, onProgress, signal, onFileDone)
+  }
+
   if (canRunRemoteDelta(job, DEVICE_ID, relay)) {
     return runRemoteDeltaSync(job, relay!, stateDb, onProgress, signal)
   }
@@ -218,6 +222,19 @@ async function runLocalSync(job: Job, onProgress: (progress: any) => void, signa
 
   const source = resolveBackend(job.source)
   const destination = resolveBackend(job.destination)
+
+  if (job.jobMode === 'import') {
+    return runImportSync(
+      job,
+      source.backend,
+      destination.backend,
+      source.rootPath,
+      destination.rootPath,
+      onProgress,
+      signal,
+      onFileDone,
+    )
+  }
 
   return runSync(
     job,

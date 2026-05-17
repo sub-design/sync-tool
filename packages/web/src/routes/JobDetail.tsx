@@ -431,7 +431,7 @@ export default function JobDetail() {
                   </div>
                   <dl className="grid gap-y-3 p-5 text-sm" style={{ gridTemplateColumns: '180px 1fr' }}>
                     <dt className="text-muted-foreground">Job type:</dt>
-                    <dd>{DIRECTION_LABEL[job.direction]}</dd>
+                    <dd>{job.jobMode === 'import' ? 'Import by date' : DIRECTION_LABEL[job.direction]}</dd>
 
                     <dt className="text-muted-foreground">Source:</dt>
                     <dd className="font-mono break-all">{job.source}</dd>
@@ -476,21 +476,21 @@ export default function JobDetail() {
                     <dt className="text-muted-foreground">Status:</dt>
                     <dd>{job.status === 'idle' ? 'Paused' : job.status === 'error' ? 'Error' : 'Active'}</dd>
 
-                    {job.transferMode && (
+                    {job.jobMode !== 'import' && job.transferMode && (
                       <>
                         <dt className="text-muted-foreground">Transfer mode:</dt>
                         <dd className="capitalize">{job.transferMode}</dd>
                       </>
                     )}
 
-                    {job.deletionPolicy && (
+                    {job.jobMode !== 'import' && job.deletionPolicy && (
                       <>
                         <dt className="text-muted-foreground">Deletion policy:</dt>
                         <dd>{DELETION_LABEL[job.deletionPolicy] ?? job.deletionPolicy}</dd>
                       </>
                     )}
 
-                    {job.conflictStrategy && (
+                    {job.jobMode !== 'import' && job.conflictStrategy && (
                       <>
                         <dt className="text-muted-foreground">Conflicts:</dt>
                         <dd className="capitalize">{job.conflictStrategy.replace('-', ' ')}</dd>

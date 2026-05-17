@@ -1,4 +1,4 @@
-import type { Job, DirEntry, AgentToken, AuditEntry, SyncLogFile } from '../types'
+import type { Job, DirEntry, AgentToken, AuditEntry, SyncLogFile, JobTemplate, Collection, CollectionTemplateLink, ApplyPreview, ApplyResult, CollectionUpdateResult } from '../types'
 import { getToken, clearToken, getOrgId } from './auth'
 
 const BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:3001'
@@ -69,6 +69,92 @@ export function deleteJob(id: string): Promise<void> {
   return apiFetch(`/api/jobs/${id}`, { method: 'DELETE' })
 }
 
+export function listJobTemplates(): Promise<JobTemplate[]> {
+  return apiFetch('/api/job-templates')
+}
+
+export function createJobTemplate(body: Pick<JobTemplate, 'name' | 'description' | 'defaults'>): Promise<JobTemplate> {
+  return apiFetch('/api/job-templates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export function updateJobTemplate(id: string, body: Partial<Pick<JobTemplate, 'name' | 'description' | 'defaults'>>): Promise<JobTemplate> {
+  return apiFetch(`/api/job-templates/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteJobTemplate(id: string): Promise<void> {
+  return apiFetch(`/api/job-templates/${id}`, { method: 'DELETE' })
+}
+
+export function listCollections(): Promise<Collection[]> {
+  return apiFetch('/api/collections')
+}
+
+export function getCollection(id: string): Promise<Collection> {
+  return apiFetch(`/api/collections/${id}`)
+}
+
+export function createCollection(body: Pick<Collection, 'name' | 'description' | 'deviceIds'>): Promise<Collection> {
+  return apiFetch('/api/collections', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export function updateCollection(
+  id: string,
+  body: Partial<Pick<Collection, 'name' | 'description' | 'deviceIds'>> & { deleteOrphanedJobs?: boolean },
+): Promise<CollectionUpdateResult> {
+  return apiFetch(`/api/collections/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export function deleteCollection(id: string): Promise<void> {
+  return apiFetch(`/api/collections/${id}`, { method: 'DELETE' })
+}
+
+export function listAppliedTemplates(collectionId: string): Promise<CollectionTemplateLink[]> {
+  return apiFetch(`/api/collections/${collectionId}/templates`)
+}
+
+export function previewApplyTemplate(collectionId: string, templateId: string): Promise<ApplyPreview> {
+  return apiFetch(`/api/collections/${collectionId}/apply/preview?templateId=${encodeURIComponent(templateId)}`)
+}
+
+export function applyTemplateToCollection(
+  collectionId: string,
+  body: { templateId: string; source?: string; destination?: string },
+): Promise<ApplyResult> {
+  return apiFetch(`/api/collections/${collectionId}/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export function unapplyTemplateFromCollection(collectionId: string, templateId: string): Promise<void> {
+  return apiFetch(`/api/collections/${collectionId}/templates/${templateId}`, { method: 'DELETE' })
+}
+
+export function getDerivedJobs(id: string): Promise<{ count: number; jobs: Job[] }> {
+  return apiFetch(`/api/job-templates/${id}/derived`)
+}
+
+export function applyJobTemplate(id: string): Promise<{ updatedCount: number }> {
+  return apiFetch(`/api/job-templates/${id}/apply`, { method: 'POST' })
+}
+
 export function runJob(id: string): Promise<void> {
   return apiFetch(`/api/jobs/${id}/run`, { method: 'POST' })
 }
@@ -108,6 +194,43 @@ export function rotateDevice(id: string, expiresInDays?: number): Promise<AgentT
 
 export function deleteDevice(id: string): Promise<void> {
   return apiFetch(`/api/devices/${id}`, { method: 'DELETE' })
+}
+
+export function getDevice(id: string): Promise<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number; os?: string; hostname?: string; ipAddress?: string; agentVersion?: string; lastSeen?: number; status?: string }> {
+  return apiFetch(`/api/devices/${id}`)
+}
+
+export function getDeviceJobs(id: string): Promise<Job[]> {
+  return apiFetch(`/api/devices/${id}/jobs`)
+}
+
+export function getDeviceSyncHistory(id: string, limit?: number): Promise<Array<{ jobId: string; jobName: string; started_at: number }>> {
+  const qs = limit != null ? `?limit=${limit}` : ''
+  return apiFetch(`/api/devices/${id}/sync-history${qs}`)
+}
+
+export function getDeviceDiagnostics(id: string): Promise<{ diskDrives: unknown[]; endpointChecks: unknown[]; jobDiagnostics: unknown[]; updatedAt: number | null }> {
+  return apiFetch(`/api/devices/${id}/diagnostics`)
+}
+
+export function updateDeviceMetadata(id: string, metadata: { os?: string; hostname?: string; ipAddress?: string; agentVersion?: string; lastSeen?: number; status?: string }): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/devices/${id}/metadata`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(metadata),
+  })
+}
+
+export function testDeviceConnection(id: string): Promise<{ ok: boolean; status: string; message: string }> {
+  return apiFetch(`/api/devices/${id}/test-connection`, { method: 'POST' })
+}
+
+export function updateDeviceClient(id: string): Promise<{ ok: boolean; status: string; message: string }> {
+  return apiFetch(`/api/devices/${id}/update-client`, { method: 'POST' })
+}
+
+export function restartDeviceAgent(id: string): Promise<{ ok: boolean; status: string; message: string }> {
+  return apiFetch(`/api/devices/${id}/restart-agent`, { method: 'POST' })
 }
 
 export function browseDir(deviceId: string, path: string): Promise<{ path: string; entries: DirEntry[] }> {

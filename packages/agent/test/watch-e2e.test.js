@@ -329,7 +329,7 @@ async function withRemoteAgents(suffix, scenario) {
 function startProcess(name, args, env) {
   const child = spawn(process.execPath, args, {
     cwd: workspaceRoot,
-    env: { ...process.env, ...env },
+    env: { ...process.env, ALLOW_OPEN_REGISTRATION: 'true', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   child.output = ''

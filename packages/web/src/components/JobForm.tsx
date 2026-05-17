@@ -4,13 +4,14 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Cron } from 'croner'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeftRight, ArrowRight, CheckIcon, Clock, Loader2, Server } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, CheckIcon, Clock, Images, Loader2, Server } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
+import { Textarea } from '@/components/ui/textarea'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,7 +24,8 @@ import * as api from '@/lib/api'
 import { validateEndpoint } from '@/lib/backend'
 import { endpointsApi } from '@/lib/endpoints'
 import { describeCron } from '@/lib/cron'
-import type { Job } from '../types'
+import type { JobPresetDefaults } from '@/jobPresets'
+import type { Job, JobTemplateDefaults } from '../types'
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -45,6 +47,17 @@ function ordinal(n: number): string {
   return n + (s[(v - 20) % 10] || s[v] || s[0])
 }
 
+function patternsToText(patterns?: string[]): string {
+  return (patterns ?? []).join('\n')
+}
+
+function textToPatterns(value: string): string[] {
+  return value
+    .split(/[\n,]+/)
+    .map((pattern) => pattern.trim())
+    .filter(Boolean)
+}
+
 // ── Zod schema ────────────────────────────────────────────────────────────────
 
 const schema = z.object({
@@ -53,10 +66,19 @@ const schema = z.object({
   destination:        z.string(),
   sourceEndpointId:      z.string().optional(),
   destinationEndpointId: z.string().optional(),
+  jobMode:           z.enum(['sync', 'import']),
   direction:          z.enum(['ltr', 'bidir', 'rtl']),
   transferMode:       z.enum(['auto', 'delta', 'full']),
   conflictStrategy:   z.enum(['newer-wins', 'skip', 'manual']),
   deletionPolicy:     z.enum(['backup', 'backup-with-deletes', 'mirror']),
+  destinationLayout:  z.enum(['sameTree', 'byCaptureDate']),
+  dateSource:         z.enum(['mtime', 'exifThenMtime']),
+  collisionPolicy:    z.enum(['skipSameErrorDifferent']),
+  filterInclude:      z.string(),
+  filterExclude:      z.string(),
+  excludeHidden:      z.boolean(),
+  excludeSystem:      z.boolean(),
+  maxFileSizeMb:      z.number().min(0).max(10_000_000),
   encryptionEnabled:  z.boolean(),
   encryptionKeyId:    z.string().optional(),
   retryAttempts:      z.number().int().min(0).max(10),
@@ -88,6 +110,7 @@ const schema = z.object({
 })
 
 type FormValues = z.infer<typeof schema>
+type JobFormDefaults = JobTemplateDefaults & Pick<JobPresetDefaults, 'encryptionEnabled'>
 
 // ── Nav ────────────────────────────────────────────────────────────────────────
 
@@ -897,6 +920,7 @@ function EndpointModeToggle({
 interface SourceDestPaneProps {
   job?: Job
   isSync: boolean
+  isImport: boolean
   srcSaved: boolean
   dstSaved: boolean
   setSrcSaved: (v: boolean) => void
@@ -910,14 +934,29 @@ interface SourceDestPaneProps {
 }
 
 function SourceDestPane({
-  isSync, srcSaved, dstSaved, setSrcSaved, setDstSaved,
+  isSync, isImport, srcSaved, dstSaved, setSrcSaved, setDstSaved,
   endpoints, control, watch, setValue, errors, register,
 }: SourceDestPaneProps) {
+  const jobMode = watch('jobMode')
+
+  function selectMode(mode: 'sync' | 'import') {
+    setValue('jobMode', mode, { shouldValidate: true })
+    if (mode === 'import') {
+      setValue('direction', 'ltr', { shouldValidate: true })
+      setValue('transferMode', 'full', { shouldValidate: true })
+      setValue('deletionPolicy', 'backup', { shouldValidate: true })
+      setValue('encryptionEnabled', false, { shouldValidate: true })
+      setValue('destinationLayout', 'byCaptureDate', { shouldValidate: true })
+      setValue('dateSource', 'exifThenMtime', { shouldValidate: true })
+      setValue('collisionPolicy', 'skipSameErrorDifferent', { shouldValidate: true })
+    }
+  }
+
   return (
     <>
       <PaneHeader
         title="Source & Destination"
-        subtitle="Where files come from and where they go."
+        subtitle={isImport ? 'Import media into date-based folders.' : 'Where files come from and where they go.'}
       />
 
       {/* Name */}
@@ -927,11 +966,52 @@ function SourceDestPane({
         {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-2 mb-5">
+        <button
+          type="button"
+          onClick={() => selectMode('sync')}
+          className={[
+            'rounded-md border p-3 text-left transition-colors hover:bg-accent',
+            jobMode === 'sync' ? 'border-primary bg-secondary' : 'border-border',
+          ].join(' ')}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2 font-medium text-sm">
+              <ArrowLeftRight size={16} />
+              Sync
+            </span>
+            {jobMode === 'sync' && <CheckIcon size={14} />}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Sync or backup folders with the existing transfer rules.
+          </p>
+        </button>
+        <button
+          type="button"
+          onClick={() => selectMode('import')}
+          className={[
+            'rounded-md border p-3 text-left transition-colors hover:bg-accent',
+            jobMode === 'import' ? 'border-primary bg-secondary' : 'border-border',
+          ].join(' ')}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2 font-medium text-sm">
+              <Images size={16} />
+              Import
+            </span>
+            {jobMode === 'import' && <CheckIcon size={14} />}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Copy photos and videos into folders by capture date.
+          </p>
+        </button>
+      </div>
+
       {/* Two-panel folder picker */}
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
           <EndpointModeToggle
-            label={isSync ? 'Left Folder' : 'Source Folder'}
+            label={isSync && !isImport ? 'Left Folder' : 'Source Folder'}
             saved={srcSaved}
             onToggle={v => { setSrcSaved(v); if (v) setValue('source', ''); else setValue('sourceEndpointId', '') }}
             endpoints={endpoints}
@@ -943,7 +1023,7 @@ function SourceDestPane({
                 name="source"
                 render={({ field }) => (
                   <EndpointPicker
-                    label={isSync ? 'Left Folder' : 'Source Folder'}
+                    label={isSync && !isImport ? 'Left Folder' : 'Source Folder'}
                     value={field.value}
                     onChange={field.onChange}
                     deviceId={watch('sourceDeviceId') || undefined}
@@ -957,7 +1037,7 @@ function SourceDestPane({
         </div>
 
         {/* Direction selector */}
-        <div className="flex flex-col items-center gap-1 pt-6 shrink-0">
+        {!isImport && <div className="flex flex-col items-center gap-1 pt-6 shrink-0">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -1010,11 +1090,11 @@ function SourceDestPane({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
+        </div>}
 
         <div className="flex-1 min-w-0">
           <EndpointModeToggle
-            label={isSync ? 'Right Folder' : 'Destination Folder'}
+            label={isSync && !isImport ? 'Right Folder' : 'Destination Folder'}
             saved={dstSaved}
             onToggle={v => { setDstSaved(v); if (v) setValue('destination', ''); else setValue('destinationEndpointId', '') }}
             endpoints={endpoints}
@@ -1026,7 +1106,7 @@ function SourceDestPane({
                 name="destination"
                 render={({ field }) => (
                   <EndpointPicker
-                    label={isSync ? 'Right Folder' : 'Destination Folder'}
+                    label={isSync && !isImport ? 'Right Folder' : 'Destination Folder'}
                     value={field.value}
                     onChange={field.onChange}
                     deviceId={watch('destinationDeviceId') || undefined}
@@ -1064,16 +1144,20 @@ const DELETION_POLICIES = [
 ]
 
 interface GeneralPaneProps {
+  isImport: boolean
   watch: ReturnType<typeof useForm<FormValues>>['watch']
   setValue: ReturnType<typeof useForm<FormValues>>['setValue']
   register: ReturnType<typeof useForm<FormValues>>['register']
   errors: ReturnType<typeof useForm<FormValues>>['formState']['errors']
 }
 
-function GeneralPane({ watch, setValue, register, errors }: GeneralPaneProps) {
+function GeneralPane({ isImport, watch, setValue, register, errors }: GeneralPaneProps) {
   const transferMode     = watch('transferMode')
   const conflictStrategy = watch('conflictStrategy')
   const deletionPolicy   = watch('deletionPolicy')
+  const destinationLayout = watch('destinationLayout')
+  const dateSource = watch('dateSource')
+  const collisionPolicy = watch('collisionPolicy')
   const direction        = watch('direction')
   const encryptionEnabled = watch('encryptionEnabled')
   const resumeEnabled    = watch('resumeEnabled')
@@ -1083,29 +1167,75 @@ function GeneralPane({ watch, setValue, register, errors }: GeneralPaneProps) {
       <PaneHeader title="General" subtitle="Transfer behaviour, reliability, and notifications." />
 
       <div className="flex flex-col gap-5">
-        {/* Transfer mode */}
-        <div className="flex flex-col gap-1.5">
-          <Label>Transfer mode</Label>
-          <div className="grid grid-cols-3 rounded-md border border-border overflow-hidden">
-            {TRANSFER_MODES.map(({ value, label }) => (
-              <Button
-                key={value}
-                type="button"
-                variant="ghost"
-                className={[
-                  'rounded-none w-full not-last:border-r border-border',
-                  transferMode === value ? 'bg-secondary font-medium' : '',
-                ].join(' ')}
-                onClick={() => setValue('transferMode', value, { shouldValidate: true })}
-              >
-                {label}
-              </Button>
-            ))}
+        {isImport && (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>Destination layout</Label>
+              <Select value={destinationLayout} onValueChange={value => setValue('destinationLayout', value as FormValues['destinationLayout'], { shouldValidate: true })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="byCaptureDate">Capture date folders</SelectItem>
+                  <SelectItem value="sameTree">Same source tree</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Capture date creates YYYY/YYYY-MM-DD folders.</p>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label>Date source</Label>
+              <Select value={dateSource} onValueChange={value => setValue('dateSource', value as FormValues['dateSource'], { shouldValidate: true })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="exifThenMtime">EXIF, then mtime</SelectItem>
+                  <SelectItem value="mtime">File mtime</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Used only for capture-date layout.</p>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label>Collision policy</Label>
+              <Select value={collisionPolicy} onValueChange={value => setValue('collisionPolicy', value as FormValues['collisionPolicy'], { shouldValidate: true })}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="skipSameErrorDifferent">Skip same, error different</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Import never overwrites destination files.</p>
+            </div>
           </div>
-        </div>
+        )}
+
+        {!isImport && (
+          <div className="flex flex-col gap-1.5">
+            <Label>Transfer mode</Label>
+            <div className="grid grid-cols-3 rounded-md border border-border overflow-hidden">
+              {TRANSFER_MODES.map(({ value, label }) => (
+                <Button
+                  key={value}
+                  type="button"
+                  variant="ghost"
+                  className={[
+                    'rounded-none w-full not-last:border-r border-border',
+                    transferMode === value ? 'bg-secondary font-medium' : '',
+                  ].join(' ')}
+                  onClick={() => setValue('transferMode', value, { shouldValidate: true })}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Conflict strategy — bidir only */}
-        {direction === 'bidir' && (
+        {!isImport && direction === 'bidir' && (
           <div className="flex flex-col gap-1.5">
             <Label>Conflict strategy</Label>
             <div className="grid grid-cols-3 rounded-md border border-border overflow-hidden">
@@ -1131,7 +1261,7 @@ function GeneralPane({ watch, setValue, register, errors }: GeneralPaneProps) {
         )}
 
         {/* Deletion policy — one-way only */}
-        {direction !== 'bidir' && (
+        {!isImport && direction !== 'bidir' && (
           <div className="flex flex-col gap-1.5">
             <Label>Destination deletes</Label>
             <div className="grid grid-cols-3 rounded-md border border-border overflow-hidden">
@@ -1217,6 +1347,93 @@ function GeneralPane({ watch, setValue, register, errors }: GeneralPaneProps) {
   )
 }
 
+// ── FiltersPane ───────────────────────────────────────────────────────────────
+
+interface FiltersPaneProps {
+  watch: ReturnType<typeof useForm<FormValues>>['watch']
+  setValue: ReturnType<typeof useForm<FormValues>>['setValue']
+  register: ReturnType<typeof useForm<FormValues>>['register']
+}
+
+function FiltersPane({ watch, setValue, register }: FiltersPaneProps) {
+  const excludeHidden = watch('excludeHidden')
+  const excludeSystem = watch('excludeSystem')
+
+  return (
+    <>
+      <PaneHeader
+        title="Filters"
+        subtitle="Limit which paths belong to this job. Patterns match relative paths; comma and new line separators both work."
+      />
+
+      <div className="grid gap-4">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="jf-filter-include">Include patterns</Label>
+            <Textarea
+              id="jf-filter-include"
+              rows={8}
+              placeholder={"*.jpg\n*.heic\nPhotos/**"}
+              className="font-mono text-sm"
+              {...register('filterInclude')}
+            />
+            <p className="text-xs text-muted-foreground">Empty means include every non-excluded file.</p>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="jf-filter-exclude">Exclude patterns</Label>
+            <Textarea
+              id="jf-filter-exclude"
+              rows={8}
+              placeholder={"node_modules/**\n.git/**\n*.tmp"}
+              className="font-mono text-sm"
+              {...register('filterExclude')}
+            />
+            <p className="text-xs text-muted-foreground">Exclude rules are applied after include rules.</p>
+          </div>
+        </div>
+
+        <SectionDivider label="Additional filters" />
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="flex items-start gap-3 rounded-md border p-3 text-sm">
+            <Switch
+              checked={excludeHidden}
+              onCheckedChange={v => setValue('excludeHidden', v, { shouldValidate: true })}
+            />
+            <span>
+              <span className="block font-medium">Exclude hidden files and folders</span>
+              <span className="block text-xs text-muted-foreground mt-0.5">Skips paths with dot-prefixed segments.</span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 rounded-md border p-3 text-sm">
+            <Switch
+              checked={excludeSystem}
+              onCheckedChange={v => setValue('excludeSystem', v, { shouldValidate: true })}
+            />
+            <span>
+              <span className="block font-medium">Exclude system files and folders</span>
+              <span className="block text-xs text-muted-foreground mt-0.5">Skips common OS metadata paths.</span>
+            </span>
+          </label>
+
+          <div className="flex flex-col gap-1.5 sm:max-w-60">
+            <Label htmlFor="jf-max-file-size">Max file size, MiB</Label>
+            <Input
+              id="jf-max-file-size"
+              type="number"
+              min={0}
+              placeholder="0 = unlimited"
+              {...register('maxFileSizeMb', { valueAsNumber: true })}
+            />
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
 // ── PlaceholderPane ───────────────────────────────────────────────────────────
 
 function PlaceholderPane({ id }: { id: string }) {
@@ -1244,11 +1461,15 @@ function PlaceholderPane({ id }: { id: string }) {
 
 export interface JobFormProps {
   job?: Job
+  presetDefaults?: JobFormDefaults
+  presetLabel?: string
+  templateId?: string
+  onClearPreset?: () => void
   onSuccess: (job: Job) => void
   onCancel?: () => void
 }
 
-export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
+export default function JobForm({ job, presetDefaults, presetLabel, templateId, onClearPreset, onSuccess, onCancel }: JobFormProps) {
   const [pane, setPane]       = useState('paths')
   const [srcSaved, setSrcSaved] = useState(Boolean(job?.sourceEndpointId))
   const [dstSaved, setDstSaved] = useState(Boolean(job?.destinationEndpointId))
@@ -1258,6 +1479,71 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
     queryFn:  endpointsApi.list,
   })
 
+  const defaultValues = useMemo<FormValues>(() => ({
+    name:               presetDefaults?.name ?? job?.name ?? generateJobName(),
+    source:             presetDefaults?.source ?? job?.source ?? '',
+    destination:        presetDefaults?.destination ?? job?.destination ?? '',
+    jobMode:           presetDefaults?.jobMode ?? job?.jobMode ?? 'sync',
+    direction:          presetDefaults?.direction ?? job?.direction ?? 'ltr',
+    transferMode:       presetDefaults?.transferMode ?? job?.transferMode ?? 'auto',
+    conflictStrategy:   presetDefaults?.conflictStrategy ?? job?.conflictStrategy ?? 'newer-wins',
+    deletionPolicy:     presetDefaults?.deletionPolicy ?? job?.deletionPolicy ?? 'backup',
+    destinationLayout:  presetDefaults?.destinationLayout ?? job?.destinationLayout ?? 'byCaptureDate',
+    dateSource:         presetDefaults?.dateSource ?? job?.dateSource ?? 'exifThenMtime',
+    collisionPolicy:    presetDefaults?.collisionPolicy ?? job?.collisionPolicy ?? 'skipSameErrorDifferent',
+    filterInclude:      patternsToText(presetDefaults?.filters?.include ?? job?.filters?.include),
+    filterExclude:      patternsToText(presetDefaults?.filters?.exclude ?? job?.filters?.exclude),
+    excludeHidden:      presetDefaults?.filters?.excludeHidden ?? job?.filters?.excludeHidden ?? false,
+    excludeSystem:      presetDefaults?.filters?.excludeSystem ?? job?.filters?.excludeSystem ?? false,
+    maxFileSizeMb:      presetDefaults?.filters?.maxFileSizeMb ?? job?.filters?.maxFileSizeMb ?? 0,
+    encryptionEnabled:  presetDefaults?.encryptionEnabled ?? presetDefaults?.reliability?.encryptionEnabled ?? (job ? (job.reliability?.encryptionEnabled ?? false) : true),
+    encryptionKeyId:    presetDefaults?.reliability?.encryptionKeyId ?? job?.reliability?.encryptionKeyId ?? '',
+    retryAttempts:      presetDefaults?.reliability?.retryAttempts ?? job?.reliability?.retryAttempts ?? 3,
+    retryMinTimeoutMs:  presetDefaults?.reliability?.retryMinTimeoutMs ?? job?.reliability?.retryMinTimeoutMs ?? 500,
+    bandwidthLimitKbps: presetDefaults?.reliability?.bandwidthLimitBps ? Math.round(presetDefaults.reliability.bandwidthLimitBps / 1024) : job?.reliability?.bandwidthLimitBps ? Math.round(job.reliability.bandwidthLimitBps / 1024) : 0,
+    resumeEnabled:      presetDefaults?.reliability?.resumeEnabled ?? job?.reliability?.resumeEnabled ?? true,
+    notifyEmail:        presetDefaults?.reliability?.notifyEmail ?? job?.reliability?.notifyEmail ?? '',
+    notifyWebhookUrl:   presetDefaults?.reliability?.notifyWebhookUrl ?? job?.reliability?.notifyWebhookUrl ?? '',
+    sourceDeviceId:        presetDefaults?.sourceDeviceId ?? job?.sourceDeviceId ?? '',
+    destinationDeviceId:   presetDefaults?.destinationDeviceId ?? job?.destinationDeviceId ?? '',
+    sourceEndpointId:      presetDefaults?.sourceEndpointId ?? job?.sourceEndpointId ?? '',
+    destinationEndpointId: presetDefaults?.destinationEndpointId ?? job?.destinationEndpointId ?? '',
+    watch:    presetDefaults?.watch ?? job?.watch ?? false,
+    fileChangeDelaySec: presetDefaults?.autoOptions?.fileChangeDelaySec ?? job?.autoOptions?.fileChangeDelaySec ?? 20,
+    onFolderConnect: presetDefaults?.autoOptions?.onFolderConnect ?? job?.autoOptions?.onFolderConnect ?? false,
+    onStart: presetDefaults?.autoOptions?.onStart ?? job?.autoOptions?.onStart ?? false,
+    periodicEnabled: Boolean(presetDefaults?.autoOptions?.periodicEveryMinutes ?? job?.autoOptions?.periodicEveryMinutes),
+    periodicHours: Math.floor(((presetDefaults?.autoOptions?.periodicEveryMinutes ?? job?.autoOptions?.periodicEveryMinutes) ?? 120) / 60),
+    periodicMinutes: ((presetDefaults?.autoOptions?.periodicEveryMinutes ?? job?.autoOptions?.periodicEveryMinutes) ?? 120) % 60,
+    onLogoff: presetDefaults?.autoOptions?.onLogoff ?? job?.autoOptions?.onLogoff ?? false,
+    unattended: presetDefaults?.autoOptions?.unattended ?? job?.autoOptions?.unattended ?? false,
+    skipIfChangedPercentEnabled: (presetDefaults?.autoOptions?.skipIfChangedPercent ?? job?.autoOptions?.skipIfChangedPercent) != null,
+    skipIfChangedPercent: presetDefaults?.autoOptions?.skipIfChangedPercent ?? job?.autoOptions?.skipIfChangedPercent ?? 100,
+    waitForLocksEnabled: (presetDefaults?.autoOptions?.waitForLocksMinutes ?? job?.autoOptions?.waitForLocksMinutes) != null,
+    waitForLocksMinutes: presetDefaults?.autoOptions?.waitForLocksMinutes ?? job?.autoOptions?.waitForLocksMinutes ?? 0,
+    autoClearTreeAfterSync: presetDefaults?.autoOptions?.autoClearTreeAfterSync ?? job?.autoOptions?.autoClearTreeAfterSync ?? false,
+    schedule: presetDefaults?.schedule ?? job?.schedule ?? '',
+  }), [job, presetDefaults])
+
+  const blankValues = useMemo<FormValues>(() => ({
+    ...defaultValues,
+    name: generateJobName(),
+    jobMode: 'sync',
+    direction: 'ltr',
+    transferMode: 'auto',
+    conflictStrategy: 'newer-wins',
+    deletionPolicy: 'backup',
+    destinationLayout: 'byCaptureDate',
+    dateSource: 'exifThenMtime',
+    collisionPolicy: 'skipSameErrorDifferent',
+    filterInclude: '',
+    filterExclude: '',
+    excludeHidden: false,
+    excludeSystem: false,
+    maxFileSizeMb: 0,
+    encryptionEnabled: true,
+  }), [defaultValues])
+
   const {
     register,
     control,
@@ -1265,48 +1551,16 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
     watch,
     setValue,
     setError,
+    reset,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: {
-      name:               job?.name        ?? generateJobName(),
-      source:             job?.source      ?? '',
-      destination:        job?.destination ?? '',
-      direction:          job?.direction   ?? 'ltr',
-      transferMode:       job?.transferMode ?? 'auto',
-      conflictStrategy:   job?.conflictStrategy ?? 'newer-wins',
-      deletionPolicy:     job?.deletionPolicy ?? 'backup',
-      encryptionEnabled:  job ? (job.reliability?.encryptionEnabled ?? false) : true,
-      encryptionKeyId:    job?.reliability?.encryptionKeyId ?? '',
-      retryAttempts:      job?.reliability?.retryAttempts ?? 3,
-      retryMinTimeoutMs:  job?.reliability?.retryMinTimeoutMs ?? 500,
-      bandwidthLimitKbps: job?.reliability?.bandwidthLimitBps ? Math.round(job.reliability.bandwidthLimitBps / 1024) : 0,
-      resumeEnabled:      job?.reliability?.resumeEnabled ?? true,
-      notifyEmail:        job?.reliability?.notifyEmail ?? '',
-      notifyWebhookUrl:   job?.reliability?.notifyWebhookUrl ?? '',
-      sourceDeviceId:        job?.sourceDeviceId ?? '',
-      destinationDeviceId:   job?.destinationDeviceId ?? '',
-      sourceEndpointId:      job?.sourceEndpointId ?? '',
-      destinationEndpointId: job?.destinationEndpointId ?? '',
-      watch:    job?.watch    ?? false,
-      fileChangeDelaySec: job?.autoOptions?.fileChangeDelaySec ?? 20,
-      onFolderConnect: job?.autoOptions?.onFolderConnect ?? false,
-      onStart: job?.autoOptions?.onStart ?? false,
-      periodicEnabled: Boolean(job?.autoOptions?.periodicEveryMinutes),
-      periodicHours: Math.floor((job?.autoOptions?.periodicEveryMinutes ?? 120) / 60),
-      periodicMinutes: (job?.autoOptions?.periodicEveryMinutes ?? 120) % 60,
-      onLogoff: job?.autoOptions?.onLogoff ?? false,
-      unattended: job?.autoOptions?.unattended ?? false,
-      skipIfChangedPercentEnabled: job?.autoOptions?.skipIfChangedPercent != null,
-      skipIfChangedPercent: job?.autoOptions?.skipIfChangedPercent ?? 100,
-      waitForLocksEnabled: job?.autoOptions?.waitForLocksMinutes != null,
-      waitForLocksMinutes: job?.autoOptions?.waitForLocksMinutes ?? 0,
-      autoClearTreeAfterSync: job?.autoOptions?.autoClearTreeAfterSync ?? false,
-      schedule: job?.schedule ?? '',
-    },
+    defaultValues,
   })
 
+  const jobMode = watch('jobMode')
   const direction = watch('direction')
+  const isImport = jobMode === 'import'
   const isSync = direction === 'bidir'
 
   const scheduleTriggerCount = [
@@ -1341,10 +1595,22 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
         destination:      dstSaved ? '' : values.destination,
         sourceEndpointId:      srcSaved ? (values.sourceEndpointId || undefined) : undefined,
         destinationEndpointId: dstSaved ? (values.destinationEndpointId || undefined) : undefined,
-        direction:        values.direction,
-        transferMode:     values.transferMode,
+        jobMode:          values.jobMode,
+        direction:        values.jobMode === 'import' ? 'ltr' : values.direction,
+        transferMode:     values.jobMode === 'import' ? 'full' : values.transferMode,
         conflictStrategy: values.conflictStrategy,
-        deletionPolicy:   values.direction === 'bidir' ? 'backup' : values.deletionPolicy,
+        deletionPolicy:   values.jobMode === 'import' || values.direction === 'bidir' ? 'backup' : values.deletionPolicy,
+        destinationLayout: values.jobMode === 'import' ? values.destinationLayout : undefined,
+        dateSource:        values.jobMode === 'import' ? values.dateSource : undefined,
+        collisionPolicy:   values.jobMode === 'import' ? values.collisionPolicy : undefined,
+        templateId,
+        filters: {
+          include:       textToPatterns(values.filterInclude),
+          exclude:       textToPatterns(values.filterExclude),
+          excludeHidden: values.excludeHidden,
+          excludeSystem: values.excludeSystem,
+          maxFileSizeMb: values.maxFileSizeMb > 0 ? values.maxFileSizeMb : undefined,
+        },
         reliability: {
           encryptionEnabled:  values.encryptionEnabled,
           encryptionKeyId:    values.encryptionKeyId || undefined,
@@ -1386,10 +1652,22 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
         <NavRail active={pane} setActive={setPane} scheduleTriggerCount={scheduleTriggerCount} />
 
         <div className="flex-1 overflow-y-auto p-6">
+          {!job && presetLabel && (
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2">
+              <div className="flex items-center gap-2 text-sm">
+                <Badge variant="secondary">Preset</Badge>
+                <span className="font-medium">{presetLabel}</span>
+              </div>
+              <Button type="button" variant="ghost" size="sm" onClick={() => onClearPreset ? onClearPreset() : reset(blankValues)}>
+                Reset to blank
+              </Button>
+            </div>
+          )}
           {pane === 'paths' && (
             <SourceDestPane
               job={job}
               isSync={isSync}
+              isImport={isImport}
               srcSaved={srcSaved}
               dstSaved={dstSaved}
               setSrcSaved={setSrcSaved}
@@ -1411,13 +1689,21 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
           )}
           {pane === 'general' && (
             <GeneralPane
+              isImport={isImport}
               watch={watch}
               setValue={setValue}
               register={register}
               errors={errors}
             />
           )}
-          {!['paths', 'schedule', 'general'].includes(pane) && (
+          {pane === 'filters' && (
+            <FiltersPane
+              watch={watch}
+              setValue={setValue}
+              register={register}
+            />
+          )}
+          {!['paths', 'schedule', 'general', 'filters'].includes(pane) && (
             <PlaceholderPane id={pane} />
           )}
         </div>
