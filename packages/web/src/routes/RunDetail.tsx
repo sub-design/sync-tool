@@ -9,10 +9,7 @@ import {
   Clock,
   Download,
   Info,
-  Lock,
-  Minus,
   RotateCcw,
-  Upload,
   XCircle,
 } from 'lucide-react'
 import Shell from '@/components/Shell'

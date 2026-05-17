@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  AlertCircle, Ban, CheckCircle2, ChevronRight, Circle, Download,
+  Ban, CheckCircle2, ChevronRight, Circle, Download,
   Loader2, MoreHorizontal, Pencil, Play, PlayCircle, RotateCcw, Square, XCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
