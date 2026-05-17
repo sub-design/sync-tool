@@ -192,6 +192,17 @@ export async function initDb(): Promise<void> {
 
   await sql`CREATE INDEX IF NOT EXISTS idx_slf_run_id ON sync_log_files (run_id)`
 
+  await sql`
+    CREATE TABLE IF NOT EXISTS device_diagnostics (
+      id            TEXT   PRIMARY KEY,
+      device_id     TEXT   NOT NULL REFERENCES agent_tokens(id) ON DELETE CASCADE,
+      disk_drives   TEXT   DEFAULT '[]',
+      endpoint_checks TEXT DEFAULT '[]',
+      job_diagnostics TEXT DEFAULT '[]',
+      updated_at    BIGINT NOT NULL
+    )
+  `
+
   // Idempotent column additions (safe to run repeatedly)
   for (const stmt of [
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS transfer_mode TEXT DEFAULT 'auto'`,
@@ -234,6 +245,12 @@ export async function initDb(): Promise<void> {
     `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE`,
     `ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE SET NULL`,
     `ALTER TABLE job_templates ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS os TEXT`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS hostname TEXT`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS ip_address TEXT`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS agent_version TEXT`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS last_seen BIGINT`,
+    `ALTER TABLE agent_tokens ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'offline'`,
   ]) {
     await sql.unsafe(stmt)
   }
@@ -350,26 +367,32 @@ export const usersDb = {
     `
   },
 
-  async listTokens(userId: string, orgId?: string): Promise<Array<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number }>> {
+  async listTokens(userId: string, orgId?: string): Promise<Array<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number; os?: string; hostname?: string; ipAddress?: string; agentVersion?: string; lastSeen?: number; status?: string }>> {
     const rows = orgId
       ? await sql`
-          SELECT id, name, created_at, expires_at, last_used_at
+          SELECT id, name, created_at, expires_at, last_used_at, os, hostname, ip_address, agent_version, last_seen, status
           FROM agent_tokens
           WHERE user_id = ${userId} AND org_id = ${orgId} AND revoked_at IS NULL
           ORDER BY created_at DESC
         `
       : await sql`
-          SELECT id, name, created_at, expires_at, last_used_at
+          SELECT id, name, created_at, expires_at, last_used_at, os, hostname, ip_address, agent_version, last_seen, status
           FROM agent_tokens
           WHERE user_id = ${userId} AND revoked_at IS NULL
           ORDER BY created_at DESC
         `
     return rows.map((r) => ({
-      id:         r.id,
-      name:       r.name,
-      createdAt:  Number(r.created_at),
-      expiresAt:  r.expires_at != null ? Number(r.expires_at) : undefined,
-      lastUsedAt: r.last_used_at != null ? Number(r.last_used_at) : undefined,
+      id:           r.id,
+      name:         r.name,
+      createdAt:    Number(r.created_at),
+      expiresAt:    r.expires_at != null ? Number(r.expires_at) : undefined,
+      lastUsedAt:   r.last_used_at != null ? Number(r.last_used_at) : undefined,
+      os:           r.os as string ?? undefined,
+      hostname:     r.hostname as string ?? undefined,
+      ipAddress:    r.ip_address as string ?? undefined,
+      agentVersion: r.agent_version as string ?? undefined,
+      lastSeen:     r.last_seen != null ? Number(r.last_seen) : undefined,
+      status:       r.status as string ?? 'offline',
     }))
   },
 
@@ -409,6 +432,105 @@ export const usersDb = {
     if (row.expires_at != null && Number(row.expires_at) <= now) return undefined
     await sql`UPDATE agent_tokens SET last_used_at = ${now} WHERE id = ${row.id}`
     return { userId: row.user_id as string, orgId: (row.org_id as string) ?? undefined }
+  },
+
+  async getDevice(id: string, orgId?: string): Promise<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number; os?: string; hostname?: string; ipAddress?: string; agentVersion?: string; lastSeen?: number; status?: string } | undefined> {
+    const rows = orgId
+      ? await sql`
+          SELECT id, name, created_at, expires_at, last_used_at, os, hostname, ip_address, agent_version, last_seen, status
+          FROM agent_tokens
+          WHERE id = ${id} AND org_id = ${orgId} AND revoked_at IS NULL
+          LIMIT 1
+        `
+      : await sql`
+          SELECT id, name, created_at, expires_at, last_used_at, os, hostname, ip_address, agent_version, last_seen, status
+          FROM agent_tokens
+          WHERE id = ${id} AND revoked_at IS NULL
+          LIMIT 1
+        `
+    const [row] = rows
+    if (!row) return undefined
+    return {
+      id:           row.id,
+      name:         row.name,
+      createdAt:    Number(row.created_at),
+      expiresAt:    row.expires_at != null ? Number(row.expires_at) : undefined,
+      lastUsedAt:   row.last_used_at != null ? Number(row.last_used_at) : undefined,
+      os:           row.os as string ?? undefined,
+      hostname:     row.hostname as string ?? undefined,
+      ipAddress:    row.ip_address as string ?? undefined,
+      agentVersion: row.agent_version as string ?? undefined,
+      lastSeen:     row.last_seen != null ? Number(row.last_seen) : undefined,
+      status:       row.status as string ?? 'offline',
+    }
+  },
+
+  async updateDeviceMetadata(id: string, metadata: { os?: string; hostname?: string; ipAddress?: string; agentVersion?: string; lastSeen?: number; status?: string }): Promise<void> {
+    const now = Date.now()
+    await sql`
+      UPDATE agent_tokens
+      SET 
+        os = ${metadata.os ?? sql`os`},
+        hostname = ${metadata.hostname ?? sql`hostname`},
+        ip_address = ${metadata.ipAddress ?? sql`ip_address`},
+        agent_version = ${metadata.agentVersion ?? sql`agent_version`},
+        last_seen = ${metadata.lastSeen ?? sql`last_seen`},
+        status = ${metadata.status ?? sql`status`}
+      WHERE id = ${id}
+    `
+  },
+}
+
+// ── Device diagnostics ─────────────────────────────────────────────────────────────
+
+export interface DeviceDiagnostics {
+  id: string
+  deviceId: string
+  diskDrives: unknown[]
+  endpointChecks: unknown[]
+  jobDiagnostics: unknown[]
+  updatedAt: number
+}
+
+export const deviceDiagnosticsDb = {
+  async get(deviceId: string): Promise<DeviceDiagnostics | undefined> {
+    const [row] = await sql`
+      SELECT id, device_id, disk_drives, endpoint_checks, job_diagnostics, updated_at
+      FROM device_diagnostics
+      WHERE device_id = ${deviceId}
+      LIMIT 1
+    `
+    if (!row) return undefined
+    return {
+      id:              row.id as string,
+      deviceId:        row.device_id as string,
+      diskDrives:      JSON.parse((row.disk_drives as string) || '[]'),
+      endpointChecks:  JSON.parse((row.endpoint_checks as string) || '[]'),
+      jobDiagnostics: JSON.parse((row.job_diagnostics as string) || '[]'),
+      updatedAt:       Number(row.updated_at),
+    }
+  },
+
+  async upsert(deviceId: string, data: Omit<DeviceDiagnostics, 'id' | 'deviceId' | 'updatedAt'>): Promise<void> {
+    const now = Date.now()
+    const existing = await deviceDiagnosticsDb.get(deviceId)
+    
+    if (existing) {
+      await sql`
+        UPDATE device_diagnostics
+        SET disk_drives = ${JSON.stringify(data.diskDrives)},
+            endpoint_checks = ${JSON.stringify(data.endpointChecks)},
+            job_diagnostics = ${JSON.stringify(data.jobDiagnostics)},
+            updated_at = ${now}
+        WHERE device_id = ${deviceId}
+      `
+    } else {
+      const id = uuid()
+      await sql`
+        INSERT INTO device_diagnostics (id, device_id, disk_drives, endpoint_checks, job_diagnostics, updated_at)
+        VALUES (${id}, ${deviceId}, ${JSON.stringify(data.diskDrives)}, ${JSON.stringify(data.endpointChecks)}, ${JSON.stringify(data.jobDiagnostics)}, ${now})
+      `
+    }
   },
 }
 

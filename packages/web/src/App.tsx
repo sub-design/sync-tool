@@ -9,6 +9,7 @@ import Jobs from './routes/Jobs'
 import JobDetail from './routes/JobDetail'
 import RunDetail from './routes/RunDetail'
 import Devices from './routes/Devices'
+import DeviceDetail from './routes/DeviceDetail'
 import Login from './routes/Login'
 import Download from './routes/Download'
 import Audit from './routes/Audit'
@@ -42,6 +43,7 @@ export default function App() {
               <Route path="/jobs/:id" element={<RequireAuth><JobDetail /></RequireAuth>} />
               <Route path="/jobs/:jobId/runs/:runId" element={<RequireAuth><RunDetail /></RequireAuth>} />
               <Route path="/devices" element={<RequireAuth><Devices /></RequireAuth>} />
+              <Route path="/devices/:id" element={<RequireAuth><DeviceDetail /></RequireAuth>} />
               <Route path="/endpoints" element={<RequireAuth><Endpoints /></RequireAuth>} />
               <Route path="/audit" element={<RequireAuth><Audit /></RequireAuth>} />
               <Route path="/org-settings" element={<RequireAuth><OrgSettings /></RequireAuth>} />

@@ -196,6 +196,43 @@ export function deleteDevice(id: string): Promise<void> {
   return apiFetch(`/api/devices/${id}`, { method: 'DELETE' })
 }
 
+export function getDevice(id: string): Promise<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number; os?: string; hostname?: string; ipAddress?: string; agentVersion?: string; lastSeen?: number; status?: string }> {
+  return apiFetch(`/api/devices/${id}`)
+}
+
+export function getDeviceJobs(id: string): Promise<Job[]> {
+  return apiFetch(`/api/devices/${id}/jobs`)
+}
+
+export function getDeviceSyncHistory(id: string, limit?: number): Promise<Array<{ jobId: string; jobName: string; started_at: number }>> {
+  const qs = limit != null ? `?limit=${limit}` : ''
+  return apiFetch(`/api/devices/${id}/sync-history${qs}`)
+}
+
+export function getDeviceDiagnostics(id: string): Promise<{ diskDrives: unknown[]; endpointChecks: unknown[]; jobDiagnostics: unknown[]; updatedAt: number | null }> {
+  return apiFetch(`/api/devices/${id}/diagnostics`)
+}
+
+export function updateDeviceMetadata(id: string, metadata: { os?: string; hostname?: string; ipAddress?: string; agentVersion?: string; lastSeen?: number; status?: string }): Promise<{ ok: boolean }> {
+  return apiFetch(`/api/devices/${id}/metadata`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(metadata),
+  })
+}
+
+export function testDeviceConnection(id: string): Promise<{ ok: boolean; status: string; message: string }> {
+  return apiFetch(`/api/devices/${id}/test-connection`, { method: 'POST' })
+}
+
+export function updateDeviceClient(id: string): Promise<{ ok: boolean; status: string; message: string }> {
+  return apiFetch(`/api/devices/${id}/update-client`, { method: 'POST' })
+}
+
+export function restartDeviceAgent(id: string): Promise<{ ok: boolean; status: string; message: string }> {
+  return apiFetch(`/api/devices/${id}/restart-agent`, { method: 'POST' })
+}
+
 export function browseDir(deviceId: string, path: string): Promise<{ path: string; entries: DirEntry[] }> {
   const qs = new URLSearchParams({ deviceId, path })
   return apiFetch(`/api/browse?${qs}`)

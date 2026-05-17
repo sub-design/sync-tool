@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { v4 as uuid } from 'uuid'
 import { randomToken, hashToken } from '../auth'
-import { usersDb } from '../db'
+import { usersDb, jobsDb, logDb, deviceDiagnosticsDb } from '../db'
 import { requireAuth } from '../middleware/requireAuth'
 import { createRateLimiter, rateLimitIp } from '../rateLimit'
 import { auditRequest } from '../audit'
@@ -19,6 +19,74 @@ export function createDevicesRouter(): Router {
 
   router.get('/', async (req, res) => {
     res.json(await usersDb.listTokens(req.userId, req.orgId))
+  })
+
+  router.get('/:id', async (req, res) => {
+    const device = await usersDb.getDevice(req.params.id, req.orgId)
+    if (!device) { res.status(404).json({ error: 'Device not found' }); return }
+    res.json(device)
+  })
+
+  router.get('/:id/jobs', async (req, res) => {
+    const deviceId = req.params.id
+    const allJobs = await jobsDb.listForOrg(req.orgId)
+    const deviceJobs = allJobs.filter(j => j.sourceDeviceId === deviceId || j.destinationDeviceId === deviceId)
+    res.json(deviceJobs)
+  })
+
+  router.get('/:id/sync-history', async (req, res) => {
+    const deviceId = req.params.id
+    const limit = parseInt(req.query.limit as string) || 50
+    
+    // Get all jobs for this device
+    const allJobs = await jobsDb.listForOrg(req.orgId)
+    const deviceJobs = allJobs.filter(j => j.sourceDeviceId === deviceId || j.destinationDeviceId === deviceId)
+    
+    // Get sync logs for all these jobs
+    const allLogs: Array<{ jobId: string; jobName: string; started_at: number }> = []
+    for (const job of deviceJobs) {
+      const logs = await logDb.list(job.id, limit)
+      for (const log of logs) {
+        allLogs.push({ ...(log as { started_at: number }), jobId: job.id, jobName: job.name })
+      }
+    }
+    
+    // Sort by started_at desc and limit
+    allLogs.sort((a, b) => b.started_at - a.started_at)
+    res.json(allLogs.slice(0, limit))
+  })
+
+  router.get('/:id/diagnostics', async (req, res) => {
+    const diagnostics = await deviceDiagnosticsDb.get(req.params.id)
+    if (!diagnostics) {
+      res.json({ diskDrives: [], endpointChecks: [], jobDiagnostics: [], updatedAt: null })
+      return
+    }
+    res.json(diagnostics)
+  })
+
+  router.post('/:id/metadata', async (req, res) => {
+    const { os, hostname, ipAddress, agentVersion, lastSeen, status } = req.body
+    await usersDb.updateDeviceMetadata(req.params.id, { os, hostname, ipAddress, agentVersion, lastSeen, status })
+    res.json({ ok: true })
+  })
+
+  router.post('/:id/test-connection', async (req, res) => {
+    // TODO: Implement actual connection test via WebSocket to agent
+    // For now, return a placeholder response
+    res.json({ ok: true, status: 'pending', message: 'Connection test initiated' })
+  })
+
+  router.post('/:id/update-client', async (req, res) => {
+    // TODO: Implement client update via WebSocket to agent
+    // For now, return a placeholder response
+    res.json({ ok: true, status: 'pending', message: 'Client update initiated' })
+  })
+
+  router.post('/:id/restart-agent', async (req, res) => {
+    // TODO: Implement agent restart via WebSocket to agent
+    // For now, return a placeholder response
+    res.json({ ok: true, status: 'pending', message: 'Agent restart initiated' })
   })
 
   router.post('/', createTokenRateLimit, async (req, res) => {

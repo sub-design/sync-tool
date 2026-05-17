@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, Plus, RotateCw, Trash2, Monitor, WifiOff } from 'lucide-react'
 import { toast } from 'sonner'
@@ -12,6 +13,7 @@ import { formatRelative } from '@/lib/format'
 import * as api from '@/lib/api'
 
 export default function Devices() {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const agentsOnline = useWsStore(s => s.agentsOnline)
 
@@ -130,7 +132,11 @@ export default function Devices() {
         ) : (
           <div className="rounded-lg border divide-y">
             {tokens.map((t) => (
-              <div key={t.id} className="flex items-center gap-3 px-4 py-3">
+              <button
+                key={t.id}
+                onClick={() => navigate(`/devices/${t.id}`)}
+                className="flex items-center gap-3 px-4 py-3 w-full text-left hover:bg-muted/40 transition-colors group"
+              >
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">{t.name}</p>
                   <p className="text-xs text-muted-foreground">
@@ -146,7 +152,7 @@ export default function Devices() {
                   variant="ghost"
                   size="icon"
                   className="text-muted-foreground hover:text-foreground shrink-0"
-                  onClick={() => rotateMutation.mutate(t.id)}
+                  onClick={(e) => { e.stopPropagation(); rotateMutation.mutate(t.id) }}
                   title="Rotate token"
                 >
                   <RotateCw className="size-4" />
@@ -155,11 +161,11 @@ export default function Devices() {
                   variant="ghost"
                   size="icon"
                   className="text-muted-foreground hover:text-destructive shrink-0"
-                  onClick={() => deleteMutation.mutate(t.id)}
+                  onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(t.id) }}
                 >
                   <Trash2 className="size-4" />
                 </Button>
-              </div>
+              </button>
             ))}
           </div>
         )}
