@@ -160,14 +160,23 @@ export interface JobTemplate {
   updatedAt: number
 }
 
+export type CollectionType = 'static' | 'dynamic'
+
+export interface MembershipRule {
+  query: string
+  description: string
+}
+
 export interface Collection {
-  id:           string
-  orgId?:       string
-  name:         string
-  description?: string
-  deviceIds:    string[]
-  createdAt:    number
-  updatedAt:    number
+  id:              string
+  orgId?:          string
+  name:            string
+  description?:    string
+  type:            CollectionType
+  deviceIds?:      string[] // Only for static collections
+  membershipRule?: MembershipRule // Only for dynamic collections
+  createdAt:       number
+  updatedAt:       number
 }
 
 export interface CollectionTemplateLink {
@@ -215,12 +224,21 @@ export interface SyncResult {
   errors: string[]
 }
 
+export interface DeviceTags {
+  platform?: string
+  role?: string
+  department?: string
+  location?: string
+  [key: string]: string | undefined
+}
+
 export interface AgentToken {
   id: string
   name: string
   createdAt: number
   expiresAt?: number
   lastUsedAt?: number
+  tags?: DeviceTags
 }
 
 export interface AuditEntry {
