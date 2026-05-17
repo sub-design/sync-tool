@@ -1,6 +1,7 @@
 import chokidar, { type FSWatcher } from 'chokidar'
 import path from 'path'
 import type { Job } from '@sync-tool/shared'
+import { resolvePathVariables, resolveUserPath } from './pathVariables'
 
 type TriggerJob = (jobId: string, changedPath?: string) => void
 
@@ -126,12 +127,17 @@ export function watchPathsForJob(job: Job, deviceId: string): string[] {
     if (!job.destinationDeviceId || job.destinationDeviceId === deviceId) candidates.push(job.destination)
   }
 
-  return [...new Set(candidates.filter(isWatchableLocalPath))]
+  return [...new Set(candidates.map(resolveWatchPath).filter(isWatchableLocalPath))]
 }
 
 function isWatchableLocalPath(value: string): boolean {
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(value)) return false
   return path.isAbsolute(value)
+}
+
+function resolveWatchPath(value: string): string {
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(resolvePathVariables(value))) return value
+  return resolveUserPath(value)
 }
 
 export function shouldIgnoreWatchPath(candidatePath: string): boolean {

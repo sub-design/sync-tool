@@ -1,10 +1,10 @@
-import path from 'path'
 import type { StorageBackend } from '../sync'
 import { localBackend } from './local'
 import { createSftpBackend } from './sftp'
 import { createFtpBackend } from './ftp'
 import { createSmbBackend, createNfsBackend } from './mounted'
 import { createS3Backend } from './s3'
+import { resolvePathVariables, resolveUserPath } from '../pathVariables'
 
 export interface ResolvedBackend {
   backend:  StorageBackend
@@ -12,27 +12,28 @@ export interface ResolvedBackend {
 }
 
 export function resolveBackend(location: string): ResolvedBackend {
-  const scheme = getScheme(location)
+  const resolvedLocation = resolvePathVariables(location)
+  const scheme = getScheme(resolvedLocation)
 
   switch (scheme) {
     case 'sftp':
-      return createSftpBackend(location)
+      return createSftpBackend(resolvedLocation)
     case 'ftp':
     case 'ftps':
-      return createFtpBackend(location)
+      return createFtpBackend(resolvedLocation)
     case 'smb':
-      return createSmbBackend(location)
+      return createSmbBackend(resolvedLocation)
     case 'cifs':
-      return createSmbBackend(location)
+      return createSmbBackend(resolvedLocation)
     case 'nfs':
-      return createNfsBackend(location)
+      return createNfsBackend(resolvedLocation)
     case 's3':
-      return createS3Backend(location)
+      return createS3Backend(resolvedLocation)
     case undefined:
     case 'file':
       return {
         backend:  localBackend,
-        rootPath: resolveLocalPath(location),
+        rootPath: resolveLocalPath(resolvedLocation),
       }
     default:
       throw new Error(`Unsupported backend scheme: ${scheme}`)
@@ -45,9 +46,5 @@ function getScheme(location: string): string | undefined {
 }
 
 function resolveLocalPath(location: string): string {
-  if (location.startsWith('file://')) {
-    return decodeURIComponent(new URL(location).pathname)
-  }
-
-  return path.resolve(location)
+  return resolveUserPath(location)
 }
