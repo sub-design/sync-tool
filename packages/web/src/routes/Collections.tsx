@@ -72,41 +72,46 @@ export default function Collections() {
                 </tr>
               </thead>
               <tbody>
-                {collections.map((col) => (
-                  <tr key={col.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                    <td className="py-3 pl-4 pr-2">
-                      <Link to={`/collections/${col.id}`} className="flex items-center gap-2 group">
-                        <FolderOpen className="size-4 text-muted-foreground" />
-                        <div>
-                          <div className="text-sm font-medium group-hover:underline">{col.name}</div>
-                          {col.description && (
-                            <div className="text-xs text-muted-foreground mt-0.5">{col.description}</div>
-                          )}
+                {collections.map((col) => {
+                  const deviceCount = col.deviceIds?.length ?? 0
+                  return (
+                    <tr key={col.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                      <td className="py-3 pl-4 pr-2">
+                        <Link to={`/collections/${col.id}`} className="flex items-center gap-2 group">
+                          <FolderOpen className="size-4 text-muted-foreground" />
+                          <div>
+                            <div className="text-sm font-medium group-hover:underline">{col.name}</div>
+                            {col.description && (
+                              <div className="text-xs text-muted-foreground mt-0.5">{col.description}</div>
+                            )}
+                          </div>
+                        </Link>
+                      </td>
+                      <td className="py-3 px-2 text-sm text-muted-foreground hidden sm:table-cell">
+                        {col.type === 'dynamic'
+                          ? 'Rule-based'
+                          : `${deviceCount} ${deviceCount === 1 ? 'device' : 'devices'}`}
+                      </td>
+                      <td className="py-3 px-2 text-xs text-muted-foreground hidden lg:table-cell">
+                        {formatRelative(col.updatedAt)}
+                      </td>
+                      <td className="py-3 pl-2 pr-4">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                            onClick={() => {
+                              if (confirm(`Delete collection "${col.name}"?`)) deleteCollection.mutate(col.id)
+                            }}
+                          >
+                            <Trash2 className="size-4" />
+                          </Button>
                         </div>
-                      </Link>
-                    </td>
-                    <td className="py-3 px-2 text-sm text-muted-foreground hidden sm:table-cell">
-                      {col.deviceIds.length} {col.deviceIds.length === 1 ? 'device' : 'devices'}
-                    </td>
-                    <td className="py-3 px-2 text-xs text-muted-foreground hidden lg:table-cell">
-                      {formatRelative(col.updatedAt)}
-                    </td>
-                    <td className="py-3 pl-2 pr-4">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                          onClick={() => {
-                            if (confirm(`Delete collection "${col.name}"?`)) deleteCollection.mutate(col.id)
-                          }}
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           )}
