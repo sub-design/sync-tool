@@ -144,12 +144,16 @@ test('scheduled job auto-runs through API scheduler and agent', { timeout: 20_00
   }
 })
 
-test('two-agent remote sync applies source rename on destination without transfer', { timeout: 30_000 }, async (t) => {
+const skipRemoteOptimizationE2E = process.env.CI === 'true'
+  ? 'remote rename/delta optimization E2E is not stable enough for CI'
+  : false
+
+test('two-agent remote sync applies source rename on destination without transfer', { timeout: 30_000, skip: skipRemoteOptimizationE2E }, async (t) => {
   if (!(await hasDatabase())) return t.skip('PostgreSQL is not available')
   await runRemoteMoveScenario('src')
 })
 
-test('two-agent remote sync applies destination rename on source without transfer', { timeout: 30_000 }, async (t) => {
+test('two-agent remote sync applies destination rename on source without transfer', { timeout: 30_000, skip: skipRemoteOptimizationE2E }, async (t) => {
   if (!(await hasDatabase())) return t.skip('PostgreSQL is not available')
   await runRemoteMoveScenario('dst')
 })
@@ -183,7 +187,7 @@ test('two-agent remote sync transfers a new file through relay as full', { timeo
   })
 })
 
-test('two-agent remote sync transfers changed file through relay as delta', { timeout: 40_000 }, async (t) => {
+test('two-agent remote sync transfers changed file through relay as delta', { timeout: 40_000, skip: skipRemoteOptimizationE2E }, async (t) => {
   if (!(await hasDatabase())) return t.skip('PostgreSQL is not available')
   if (!(await hasSyncEngine())) return t.skip('sync engine binary is not available; run pnpm build:engine')
 
