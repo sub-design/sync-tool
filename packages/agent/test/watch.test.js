@@ -15,6 +15,18 @@ test('watchPathsForJob watches local paths for untargeted jobs', () => {
   assert.deepEqual(watchPathsForJob(job, 'device-a'), ['/tmp/source', '/tmp/destination'])
 })
 
+test('watchPathsForJob resolves local path variables before watching', () => {
+  const job = baseJob({
+    source: '{UserHome}/Sync Source',
+    destination: '{Downloads}/Sync Destination',
+    watch: true,
+  })
+
+  assert.deepEqual(watchPathsForJob(job, 'device-a'), [
+    path.join(require('node:os').homedir(), 'Sync Source'),
+  ])
+})
+
 test('watchPathsForJob watches only this device side for targeted bidirectional jobs', () => {
   const job = baseJob({
     direction: 'bidir',

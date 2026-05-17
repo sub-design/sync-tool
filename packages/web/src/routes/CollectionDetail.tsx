@@ -100,6 +100,8 @@ export default function CollectionDetail() {
   }
 
   const isEmpty = applied.length === 0
+  const staticDeviceCount = collection.deviceIds?.length ?? 0
+  const canApplyTemplates = collection.type === 'dynamic' || staticDeviceCount > 0
 
   return (
     <Shell>
@@ -131,8 +133,8 @@ export default function CollectionDetail() {
               <Button
                 size="sm"
                 onClick={() => setApplying(true)}
-                disabled={collection.deviceIds.length === 0}
-                title={collection.deviceIds.length === 0 ? 'Add devices first' : 'Apply a template'}
+                disabled={!canApplyTemplates}
+                title={!canApplyTemplates ? 'Add devices first' : 'Apply a template'}
               >
                 <Send className="size-3.5" />
                 Apply Template
@@ -167,7 +169,7 @@ export default function CollectionDetail() {
                 variant="ghost"
                 className="h-7 text-xs"
                 onClick={() => setApplying(true)}
-                disabled={collection.deviceIds.length === 0}
+                disabled={!canApplyTemplates}
               >
                 <Plus className="size-3.5" /> Apply another
               </Button>
@@ -177,11 +179,13 @@ export default function CollectionDetail() {
             <div className="rounded-lg border border-dashed py-10 px-6 text-center">
               <p className="text-sm font-medium">No templates applied yet</p>
               <p className="text-xs text-muted-foreground mt-1">
-                {collection.deviceIds.length === 0
+                {!canApplyTemplates
                   ? 'Add devices to this collection first, then apply a template to start protecting them.'
-                  : `Apply a template to create jobs on all ${collection.deviceIds.length} device${collection.deviceIds.length !== 1 ? 's' : ''} at once.`}
+                  : collection.type === 'dynamic'
+                    ? 'Apply a template to create jobs for devices matching this collection rule.'
+                    : `Apply a template to create jobs on all ${staticDeviceCount} device${staticDeviceCount !== 1 ? 's' : ''} at once.`}
               </p>
-              {collection.deviceIds.length > 0 && (
+              {canApplyTemplates && (
                 <Button className="mt-4" size="sm" onClick={() => setApplying(true)}>
                   <Send className="size-3.5" /> Apply Template
                 </Button>

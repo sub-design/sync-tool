@@ -7,6 +7,14 @@ import { createRateLimiter, rateLimitIp } from '../rateLimit'
 import { auditRequest } from '../audit'
 
 const DEFAULT_AGENT_TOKEN_TTL_DAYS = Math.max(1, parseInt(process.env.AGENT_TOKEN_TTL_DAYS ?? '90', 10))
+const MAX_BATCH_SIZE = 100
+
+function parseBatchIds(body: unknown): string[] | undefined {
+  const ids = (body as { ids?: unknown } | undefined)?.ids
+  if (!Array.isArray(ids)) return undefined
+  const unique = [...new Set(ids.filter((id): id is string => typeof id === 'string' && id.trim() !== ''))]
+  return unique.length > 0 && unique.length <= MAX_BATCH_SIZE ? unique : undefined
+}
 
 export function createDevicesRouter(): Router {
   const router = Router()
@@ -137,6 +145,85 @@ export function createDevicesRouter(): Router {
       targetId:   req.params.id,
     })
     res.json({ ok: true })
+  })
+
+  // ── Batch operations ─────────────────────────────────────────────────────────────
+
+  router.post('/batch/delete', async (req, res) => {
+    const ids = parseBatchIds(req.body)
+    if (!ids) {
+      res.status(400).json({ error: `ids array is required and must contain 1-${MAX_BATCH_SIZE} device ids` })
+      return
+    }
+
+    const results = await Promise.allSettled(
+      ids.map(async (id) => {
+        const existing = await usersDb.getDevice(id, req.orgId)
+        if (!existing) return { id, ok: false, error: 'Token not found' }
+
+        const ok = await usersDb.revokeToken(id, req.userId)
+        if (ok) {
+          auditRequest(req, 'agent_token.revoked', {
+            targetType: 'agent_token',
+            targetId:   id,
+          })
+        }
+        return { id, ok }
+      })
+    )
+
+    const successful = results.filter(r => r.status === 'fulfilled' && r.value.ok).length
+    const failed = results.length - successful
+
+    res.json({
+      total: results.length,
+      successful,
+      failed,
+      results: results.map(r => r.status === 'fulfilled' ? r.value : { id: (r.reason as any)?.id, ok: false })
+    })
+  })
+
+  router.post('/batch/rotate', createTokenRateLimit, async (req, res) => {
+    const ids = parseBatchIds(req.body)
+    if (!ids) {
+      res.status(400).json({ error: `ids array is required and must contain 1-${MAX_BATCH_SIZE} device ids` })
+      return
+    }
+    const { expiresInDays } = req.body
+
+    const ttlDays = Number.isInteger(expiresInDays) && expiresInDays > 0 && expiresInDays <= 3650
+      ? expiresInDays
+      : DEFAULT_AGENT_TOKEN_TTL_DAYS
+
+    const results = await Promise.allSettled(
+      ids.map(async (id) => {
+        const existing = await usersDb.getDevice(id, req.orgId)
+        if (!existing) return { id, ok: false, error: 'Token not found' }
+
+        const newId = uuid()
+        const token = randomToken()
+        const expiresAt = Date.now() + ttlDays * 24 * 60 * 60 * 1000
+
+        await usersDb.createToken(newId, req.userId, existing.name, hashToken(token), expiresAt, existing.id, req.orgId)
+        await usersDb.revokeToken(existing.id, req.userId)
+        auditRequest(req, 'agent_token.rotated', {
+          targetType: 'agent_token',
+          targetId:   newId,
+          metadata:   { rotatedFrom: existing.id, name: existing.name, expiresAt },
+        })
+        return { id: newId, oldId: id, name: existing.name, token, expiresAt, ok: true }
+      })
+    )
+
+    const successful = results.filter(r => r.status === 'fulfilled' && r.value.ok).length
+    const failed = results.length - successful
+
+    res.json({
+      total: results.length,
+      successful,
+      failed,
+      results: results.map(r => r.status === 'fulfilled' ? r.value : { id: (r.reason as any)?.id, ok: false })
+    })
   })
 
   return router

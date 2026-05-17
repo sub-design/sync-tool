@@ -249,35 +249,18 @@ export function batchDeleteDevices(ids: string[]): Promise<{ total: number; succ
   })
 }
 
-export function batchRotateDevices(ids: string[], expiresInDays?: number): Promise<{ total: number; successful: number; failed: number; results: Array<{ id: string; ok: boolean }> }> {
+export interface BatchRotateDeviceResult {
+  total: number
+  successful: number
+  failed: number
+  results: Array<{ id: string; oldId?: string; name?: string; token?: string; expiresAt?: number; ok: boolean; error?: string }>
+}
+
+export function batchRotateDevices(ids: string[], expiresInDays?: number): Promise<BatchRotateDeviceResult> {
   return apiFetch('/api/devices/batch/rotate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ids, expiresInDays }),
-  })
-}
-
-export function batchTestDeviceConnections(ids: string[]): Promise<{ total: number; successful: number; failed: number; results: Array<{ id: string; ok: boolean; status: string; message: string }> }> {
-  return apiFetch('/api/devices/batch/test-connection', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids }),
-  })
-}
-
-export function batchUpdateDeviceClients(ids: string[]): Promise<{ total: number; successful: number; failed: number; results: Array<{ id: string; ok: boolean; status: string; message: string }> }> {
-  return apiFetch('/api/devices/batch/update-client', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids }),
-  })
-}
-
-export function batchRestartDeviceAgents(ids: string[]): Promise<{ total: number; successful: number; failed: number; results: Array<{ id: string; ok: boolean; status: string; message: string }> }> {
-  return apiFetch('/api/devices/batch/restart-agent', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids }),
   })
 }
 

@@ -1,6 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { resolveUserPath } from './pathVariables'
 
 export interface AllowedPath {
   inputPath: string
@@ -32,19 +33,12 @@ export async function assertAllowedPath(inputPath: string): Promise<AllowedPath>
   return { inputPath, resolvedPath: candidate.resolvedPath }
 }
 
-export function resolveUserPath(inputPath: string): string {
-  if (inputPath === '~' || inputPath === '') return os.homedir()
-  if (inputPath.startsWith('~/')) return path.resolve(os.homedir(), inputPath.slice(2))
-  if (inputPath.startsWith(FILE_URL_PREFIX)) return path.resolve(decodeURIComponent(new URL(inputPath).pathname))
-  return path.resolve(inputPath)
-}
-
 async function allowedRoots(): Promise<Array<{ rootPath: string; realPath: string }>> {
   const configured = (process.env.SYNC_ALLOWED_ROOTS ?? '')
     .split(path.delimiter)
     .map((entry) => entry.trim())
     .filter(Boolean)
-  const roots = [os.homedir(), ...configured].map(resolveUserPath)
+  const roots = [os.homedir(), ...configured].map((root) => resolveUserPath(root))
   const uniqueRoots = [...new Set(roots)]
   const result: Array<{ rootPath: string; realPath: string }> = []
 
