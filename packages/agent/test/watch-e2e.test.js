@@ -408,7 +408,8 @@ async function hasSyncEngine() {
 }
 
 async function setupAuth(port, suffix) {
-  const email = `test-${suffix}@example.com`
+  const unique = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const email = `test-${suffix}-${unique}@example.com`
   const password = 'correct horse battery staple'
   const registered = await postJson(`http://127.0.0.1:${port}/api/auth/register`, { email, password })
   const device = await postJson(`http://127.0.0.1:${port}/api/devices`, { name: `agent-${suffix}` }, registered.token)
