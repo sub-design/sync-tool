@@ -5,10 +5,11 @@ import path from 'path'
 import { pipeline } from 'stream/promises'
 import { Transform } from 'stream'
 import pRetry from 'p-retry'
+import * as exifr from 'exifr'
 import { transferFileDelta } from './delta/engine'
 import { streamSHA256 } from './delta/engine'
 import type { StoredFileState, StateStore } from './state'
-import { STATE_DIR } from './state'
+import { STATE_DIR } from './statePath'
 import { acquireLock, releaseLock, isLocalPath } from './lock'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,6 +149,18 @@ const HOUR_MS            = 3_600_000
 const DEFAULT_RETRY_ATTEMPTS = 3
 const DEFAULT_RETRY_MIN_TIMEOUT_MS = 500
 const ENCRYPTION_HEADER_MAGIC = Buffer.from('SYNCENC1')
+const EXIF_PREFIX_BYTES = 131_072
+const IMPORT_MEDIA_EXTENSIONS = new Set([
+  '.jpg', '.jpeg', '.jpe', '.heic', '.heif', '.tif', '.tiff', '.png', '.avif',
+  '.dng', '.cr2', '.cr3', '.nef', '.arw', '.raf', '.rw2', '.orf', '.srw',
+  '.pef', '.x3f', '.iiq', '.rwl', '.raw',
+  '.mov', '.mp4', '.m4v', '.avi', '.mts', '.m2ts', '.mpg', '.mpeg', '.3gp',
+])
+const IMPORT_EXIF_EXTENSIONS = new Set([
+  '.jpg', '.jpeg', '.jpe', '.heic', '.heif', '.tif', '.tiff', '.png', '.avif',
+  '.dng', '.cr2', '.cr3', '.nef', '.arw', '.raf', '.rw2', '.orf', '.srw',
+  '.pef', '.x3f', '.iiq', '.rwl', '.raw',
+])
 
 // DST-aware mtime comparison: returns true if two timestamps represent the same file.
 // FAT32 has 2-second resolution; Windows also shifts mtime by exactly ±1h or ±2h on
@@ -171,6 +184,173 @@ export function fileChanged(
   const prevMtime = side === 'src' ? prev.srcMtimeMs : prev.dstMtimeMs
   if (prevSize === null || prevMtime === null) return true // newly appeared on this side
   return entry.size !== prevSize || !mtimeEqual(entry.mtimeMs, prevMtime)
+}
+
+// ── Lightroom-style import ───────────────────────────────────────────────────
+
+export async function runImportSync(
+  job:        Job,
+  srcBackend: StorageBackend,
+  dstBackend: StorageBackend,
+  srcPath:    string,
+  dstPath:    string,
+  onProgress: (p: Partial<SyncProgress>) => void = () => {},
+  signal?:     AbortSignal,
+  onFileDone?: (file: SyncFileEvent) => void,
+): Promise<SyncResult> {
+  const startedAt = Date.now()
+  const result: SyncResult = {
+    jobId:            job.id,
+    startedAt,
+    endedAt:          0,
+    filesCopied:      0,
+    filesDeleted:     0,
+    filesSkipped:     0,
+    filesErrored:     0,
+    conflictsPending: 0,
+    bytesTransferred: 0,
+    logicalBytes:     0,
+    deltaBytes:       0,
+    fullBytes:        0,
+    deltaFiles:       0,
+    fullFiles:        0,
+    transportMode:    'local',
+    errors:           [],
+  }
+
+  const lockDir = isLocalPath(srcPath) ? srcPath : null
+  if (lockDir) await acquireLockForJob(lockDir, job, signal ?? new AbortController().signal)
+
+  try {
+    await srcBackend.mkdirp(srcPath)
+    await dstBackend.mkdirp(dstPath)
+
+    throwIfAborted(signal)
+    const srcFiles = await srcBackend.walk(srcPath)
+    throwIfAborted(signal)
+    const dstFiles = await dstBackend.walk(dstPath)
+
+    const entries = [...srcFiles.values()].filter((e) => !e.isDirectory)
+    let processed = 0
+
+    for (const srcEntry of entries) {
+      throwIfAborted(signal)
+      const ext = path.extname(srcEntry.relativePath).toLowerCase()
+
+      if (!IMPORT_MEDIA_EXTENSIONS.has(ext)) {
+        result.filesSkipped++
+        onFileDone?.({ relativePath: srcEntry.relativePath, isDirectory: false, action: 'skipped', size: srcEntry.size, mtimeMs: srcEntry.mtimeMs })
+        processed++
+        onProgress({
+          jobId:            job.id,
+          currentFile:      srcEntry.relativePath,
+          filesProcessed:   processed,
+          filesTotal:       entries.length,
+          bytesTransferred: result.bytesTransferred,
+        })
+        continue
+      }
+
+      let targetRel = srcEntry.relativePath
+      try {
+        const captureDate = await importCaptureDate(srcEntry, srcBackend)
+        targetRel = importRelativePath(captureDate, path.basename(srcEntry.relativePath))
+        const targetPath = joinRemote(dstPath, targetRel)
+        const dstEntry = dstFiles.get(targetRel)
+
+        if (dstEntry) {
+          if (dstEntry.size === srcEntry.size && mtimeEqual(dstEntry.mtimeMs, srcEntry.mtimeMs)) {
+            result.filesSkipped++
+            onFileDone?.({ relativePath: targetRel, isDirectory: false, action: 'skipped', size: srcEntry.size, mtimeMs: srcEntry.mtimeMs })
+          } else {
+            throw new Error(`destination already has a different file at ${targetRel}`)
+          }
+        } else {
+          await dstBackend.mkdirp(joinRemote(dstPath, path.dirname(targetRel)))
+          const transferred = await transferFile(srcEntry, srcBackend, targetPath, dstBackend, undefined, { ...job, transferMode: 'full' }, signal)
+          result.filesCopied++
+          applyTransferStats(result, transferred)
+          dstFiles.set(targetRel, {
+            ...srcEntry,
+            relativePath: targetRel,
+            absolutePath: targetPath,
+          })
+          onFileDone?.({ relativePath: targetRel, isDirectory: false, action: 'copied', size: srcEntry.size, mtimeMs: srcEntry.mtimeMs })
+        }
+      } catch (err: any) {
+        result.filesErrored++
+        result.errors.push(`${targetRel}: ${err.message}`)
+        onFileDone?.({ relativePath: targetRel, isDirectory: false, action: 'errored', size: srcEntry.size, mtimeMs: srcEntry.mtimeMs, errorMsg: err.message })
+      }
+
+      processed++
+      onProgress({
+        jobId:            job.id,
+        currentFile:      targetRel,
+        filesProcessed:   processed,
+        filesTotal:       entries.length,
+        bytesTransferred: result.bytesTransferred,
+      })
+    }
+  } finally {
+    if (lockDir) await releaseLock(lockDir)
+    result.endedAt = Date.now()
+    await srcBackend.close?.()
+    if (dstBackend !== srcBackend) await dstBackend.close?.()
+  }
+
+  return result
+}
+
+async function importCaptureDate(entry: FileEntry, backend: StorageBackend): Promise<Date> {
+  const ext = path.extname(entry.relativePath).toLowerCase()
+  if (IMPORT_EXIF_EXTENSIONS.has(ext)) {
+    try {
+      const prefix = await readStreamPrefix(await backend.read(entry.absolutePath), EXIF_PREFIX_BYTES)
+      const metadata = await exifr.parse(prefix, { pick: ['DateTimeOriginal', 'CreateDate', 'ModifyDate'] }) as {
+        DateTimeOriginal?: Date
+        CreateDate?: Date
+        ModifyDate?: Date
+      } | undefined
+      const captureDate = metadata?.DateTimeOriginal ?? metadata?.CreateDate ?? metadata?.ModifyDate
+      if (captureDate instanceof Date && !Number.isNaN(captureDate.getTime())) return captureDate
+    } catch {
+      // Fall back to filesystem mtime below.
+    }
+  }
+
+  return new Date(entry.mtimeMs)
+}
+
+async function readStreamPrefix(stream: NodeJS.ReadableStream, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  let total = 0
+
+  try {
+    for await (const chunk of stream as NodeJS.ReadableStream & AsyncIterable<Buffer | string>) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      const remaining = maxBytes - total
+      if (buffer.length >= remaining) {
+        chunks.push(buffer.subarray(0, remaining))
+        total += remaining
+        break
+      }
+
+      chunks.push(buffer)
+      total += buffer.length
+    }
+  } finally {
+    ;(stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
+  }
+
+  return Buffer.concat(chunks, total)
+}
+
+function importRelativePath(date: Date, filename: string): string {
+  const yyyy = String(date.getFullYear())
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  const dd = String(date.getDate()).padStart(2, '0')
+  return `${yyyy}/${yyyy}-${mm}-${dd}/${filename}`
 }
 
 type SyncAction = 'copy-to-dst' | 'copy-to-src' | 'delete-dst' | 'delete-src' | 'conflict' | 'skip'

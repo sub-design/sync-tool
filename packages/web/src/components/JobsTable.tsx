@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  ArrowRight, ArrowLeft, ArrowLeftRight,
+  ArrowRight, ArrowLeft, ArrowLeftRight, Images,
   Play, StopCircle, Trash2, MoreHorizontal,
   ChevronUp, ChevronDown, ChevronsUpDown,
   CheckCircle2, XCircle, Loader2,
@@ -253,7 +253,8 @@ export default function JobsTable({ jobs, emptyMessage = 'No jobs.' }: Props) {
           </thead>
           <tbody>
             {sorted.map(job => {
-              const DirIcon = DIRECTION_ICON[job.direction] ?? ArrowRight
+              const DirIcon = job.jobMode === 'import' ? Images : DIRECTION_ICON[job.direction] ?? ArrowRight
+              const directionLabel = job.jobMode === 'import' ? 'Import by date' : DIRECTION_LABEL[job.direction]
               const isActive = job.status === 'running' || job.status === 'queued'
               const progress = jobProgress.get(job.id)
 
@@ -292,7 +293,7 @@ export default function JobsTable({ jobs, emptyMessage = 'No jobs.' }: Props) {
                   </td>
                   <td className="py-3 px-2 hidden md:table-cell">
                     <span className="text-xs text-muted-foreground">
-                      {DIRECTION_LABEL[job.direction]}
+                      {directionLabel}
                     </span>
                   </td>
                   <td className="py-3 px-2 hidden lg:table-cell">

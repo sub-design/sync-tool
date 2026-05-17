@@ -1,12 +1,9 @@
 import path from 'path'
-import os from 'os'
 import Database from 'better-sqlite3'
 import { existsSync, mkdirSync, readFileSync } from 'fs'
+import { STATE_DIR } from './statePath'
 
-export const STATE_DIR = process.env.STATE_DIR
-  ?? (process.platform === 'darwin'
-      ? path.join(os.homedir(), 'Library', 'Application Support', 'SyncTool')
-      : path.join(os.homedir(), '.synctool'))
+export { STATE_DIR }
 
 const JOBS_DIR    = path.join(STATE_DIR, 'jobs')
 const LEGACY_FILE = path.join(STATE_DIR, 'agent-state.json')  // pre per-job path

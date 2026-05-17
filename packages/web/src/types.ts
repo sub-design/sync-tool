@@ -32,6 +32,7 @@ export interface DirEntry {
 }
 
 export type JobDirection      = 'ltr' | 'rtl' | 'bidir'
+export type JobMode           = 'sync' | 'import'
 export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'cancelled' | 'error'
 export type TransferMode     = 'full' | 'delta' | 'auto'
 export type ConflictStrategy = 'newer-wins' | 'skip' | 'manual'
@@ -111,7 +112,7 @@ export interface JobAutoOptions {
 
 export interface Job {
   id: string; name: string; source: string; destination: string
-  direction: JobDirection; transferMode?: TransferMode
+  direction: JobDirection; jobMode?: JobMode; transferMode?: TransferMode
   conflictStrategy?: ConflictStrategy
   deletionPolicy?: DeletionPolicy
   reliability?: JobReliability

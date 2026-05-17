@@ -4,7 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Cron } from 'croner'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeftRight, ArrowRight, CheckIcon, Clock, Loader2, Server } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, CheckIcon, Clock, Images, Loader2, Server } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -53,6 +53,7 @@ const schema = z.object({
   destination:        z.string(),
   sourceEndpointId:      z.string().optional(),
   destinationEndpointId: z.string().optional(),
+  jobMode:           z.enum(['sync', 'import']),
   direction:          z.enum(['ltr', 'bidir', 'rtl']),
   transferMode:       z.enum(['auto', 'delta', 'full']),
   conflictStrategy:   z.enum(['newer-wins', 'skip', 'manual']),
@@ -897,6 +898,7 @@ function EndpointModeToggle({
 interface SourceDestPaneProps {
   job?: Job
   isSync: boolean
+  isImport: boolean
   srcSaved: boolean
   dstSaved: boolean
   setSrcSaved: (v: boolean) => void
@@ -910,14 +912,26 @@ interface SourceDestPaneProps {
 }
 
 function SourceDestPane({
-  isSync, srcSaved, dstSaved, setSrcSaved, setDstSaved,
+  isSync, isImport, srcSaved, dstSaved, setSrcSaved, setDstSaved,
   endpoints, control, watch, setValue, errors, register,
 }: SourceDestPaneProps) {
+  const jobMode = watch('jobMode')
+
+  function selectMode(mode: 'sync' | 'import') {
+    setValue('jobMode', mode, { shouldValidate: true })
+    if (mode === 'import') {
+      setValue('direction', 'ltr', { shouldValidate: true })
+      setValue('transferMode', 'full', { shouldValidate: true })
+      setValue('deletionPolicy', 'backup', { shouldValidate: true })
+      setValue('encryptionEnabled', false, { shouldValidate: true })
+    }
+  }
+
   return (
     <>
       <PaneHeader
         title="Source & Destination"
-        subtitle="Where files come from and where they go."
+        subtitle={isImport ? 'Import media into date-based folders.' : 'Where files come from and where they go.'}
       />
 
       {/* Name */}
@@ -927,11 +941,52 @@ function SourceDestPane({
         {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-2 mb-5">
+        <button
+          type="button"
+          onClick={() => selectMode('sync')}
+          className={[
+            'rounded-md border p-3 text-left transition-colors hover:bg-accent',
+            jobMode === 'sync' ? 'border-primary bg-secondary' : 'border-border',
+          ].join(' ')}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2 font-medium text-sm">
+              <ArrowLeftRight size={16} />
+              Sync
+            </span>
+            {jobMode === 'sync' && <CheckIcon size={14} />}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Sync or backup folders with the existing transfer rules.
+          </p>
+        </button>
+        <button
+          type="button"
+          onClick={() => selectMode('import')}
+          className={[
+            'rounded-md border p-3 text-left transition-colors hover:bg-accent',
+            jobMode === 'import' ? 'border-primary bg-secondary' : 'border-border',
+          ].join(' ')}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-2 font-medium text-sm">
+              <Images size={16} />
+              Import
+            </span>
+            {jobMode === 'import' && <CheckIcon size={14} />}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            Copy photos and videos into folders by capture date.
+          </p>
+        </button>
+      </div>
+
       {/* Two-panel folder picker */}
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
           <EndpointModeToggle
-            label={isSync ? 'Left Folder' : 'Source Folder'}
+            label={isSync && !isImport ? 'Left Folder' : 'Source Folder'}
             saved={srcSaved}
             onToggle={v => { setSrcSaved(v); if (v) setValue('source', ''); else setValue('sourceEndpointId', '') }}
             endpoints={endpoints}
@@ -943,7 +998,7 @@ function SourceDestPane({
                 name="source"
                 render={({ field }) => (
                   <EndpointPicker
-                    label={isSync ? 'Left Folder' : 'Source Folder'}
+                    label={isSync && !isImport ? 'Left Folder' : 'Source Folder'}
                     value={field.value}
                     onChange={field.onChange}
                     deviceId={watch('sourceDeviceId') || undefined}
@@ -957,7 +1012,7 @@ function SourceDestPane({
         </div>
 
         {/* Direction selector */}
-        <div className="flex flex-col items-center gap-1 pt-6 shrink-0">
+        {!isImport && <div className="flex flex-col items-center gap-1 pt-6 shrink-0">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
@@ -1010,11 +1065,11 @@ function SourceDestPane({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-        </div>
+        </div>}
 
         <div className="flex-1 min-w-0">
           <EndpointModeToggle
-            label={isSync ? 'Right Folder' : 'Destination Folder'}
+            label={isSync && !isImport ? 'Right Folder' : 'Destination Folder'}
             saved={dstSaved}
             onToggle={v => { setDstSaved(v); if (v) setValue('destination', ''); else setValue('destinationEndpointId', '') }}
             endpoints={endpoints}
@@ -1026,7 +1081,7 @@ function SourceDestPane({
                 name="destination"
                 render={({ field }) => (
                   <EndpointPicker
-                    label={isSync ? 'Right Folder' : 'Destination Folder'}
+                    label={isSync && !isImport ? 'Right Folder' : 'Destination Folder'}
                     value={field.value}
                     onChange={field.onChange}
                     deviceId={watch('destinationDeviceId') || undefined}
@@ -1064,13 +1119,14 @@ const DELETION_POLICIES = [
 ]
 
 interface GeneralPaneProps {
+  isImport: boolean
   watch: ReturnType<typeof useForm<FormValues>>['watch']
   setValue: ReturnType<typeof useForm<FormValues>>['setValue']
   register: ReturnType<typeof useForm<FormValues>>['register']
   errors: ReturnType<typeof useForm<FormValues>>['formState']['errors']
 }
 
-function GeneralPane({ watch, setValue, register, errors }: GeneralPaneProps) {
+function GeneralPane({ isImport, watch, setValue, register, errors }: GeneralPaneProps) {
   const transferMode     = watch('transferMode')
   const conflictStrategy = watch('conflictStrategy')
   const deletionPolicy   = watch('deletionPolicy')
@@ -1083,29 +1139,30 @@ function GeneralPane({ watch, setValue, register, errors }: GeneralPaneProps) {
       <PaneHeader title="General" subtitle="Transfer behaviour, reliability, and notifications." />
 
       <div className="flex flex-col gap-5">
-        {/* Transfer mode */}
-        <div className="flex flex-col gap-1.5">
-          <Label>Transfer mode</Label>
-          <div className="grid grid-cols-3 rounded-md border border-border overflow-hidden">
-            {TRANSFER_MODES.map(({ value, label }) => (
-              <Button
-                key={value}
-                type="button"
-                variant="ghost"
-                className={[
-                  'rounded-none w-full not-last:border-r border-border',
-                  transferMode === value ? 'bg-secondary font-medium' : '',
-                ].join(' ')}
-                onClick={() => setValue('transferMode', value, { shouldValidate: true })}
-              >
-                {label}
-              </Button>
-            ))}
+        {!isImport && (
+          <div className="flex flex-col gap-1.5">
+            <Label>Transfer mode</Label>
+            <div className="grid grid-cols-3 rounded-md border border-border overflow-hidden">
+              {TRANSFER_MODES.map(({ value, label }) => (
+                <Button
+                  key={value}
+                  type="button"
+                  variant="ghost"
+                  className={[
+                    'rounded-none w-full not-last:border-r border-border',
+                    transferMode === value ? 'bg-secondary font-medium' : '',
+                  ].join(' ')}
+                  onClick={() => setValue('transferMode', value, { shouldValidate: true })}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Conflict strategy — bidir only */}
-        {direction === 'bidir' && (
+        {!isImport && direction === 'bidir' && (
           <div className="flex flex-col gap-1.5">
             <Label>Conflict strategy</Label>
             <div className="grid grid-cols-3 rounded-md border border-border overflow-hidden">
@@ -1131,7 +1188,7 @@ function GeneralPane({ watch, setValue, register, errors }: GeneralPaneProps) {
         )}
 
         {/* Deletion policy — one-way only */}
-        {direction !== 'bidir' && (
+        {!isImport && direction !== 'bidir' && (
           <div className="flex flex-col gap-1.5">
             <Label>Destination deletes</Label>
             <div className="grid grid-cols-3 rounded-md border border-border overflow-hidden">
@@ -1272,6 +1329,7 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
       name:               job?.name        ?? generateJobName(),
       source:             job?.source      ?? '',
       destination:        job?.destination ?? '',
+      jobMode:           job?.jobMode ?? 'sync',
       direction:          job?.direction   ?? 'ltr',
       transferMode:       job?.transferMode ?? 'auto',
       conflictStrategy:   job?.conflictStrategy ?? 'newer-wins',
@@ -1306,7 +1364,9 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
     },
   })
 
+  const jobMode = watch('jobMode')
   const direction = watch('direction')
+  const isImport = jobMode === 'import'
   const isSync = direction === 'bidir'
 
   const scheduleTriggerCount = [
@@ -1341,10 +1401,11 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
         destination:      dstSaved ? '' : values.destination,
         sourceEndpointId:      srcSaved ? (values.sourceEndpointId || undefined) : undefined,
         destinationEndpointId: dstSaved ? (values.destinationEndpointId || undefined) : undefined,
-        direction:        values.direction,
-        transferMode:     values.transferMode,
+        jobMode:          values.jobMode,
+        direction:        values.jobMode === 'import' ? 'ltr' : values.direction,
+        transferMode:     values.jobMode === 'import' ? 'full' : values.transferMode,
         conflictStrategy: values.conflictStrategy,
-        deletionPolicy:   values.direction === 'bidir' ? 'backup' : values.deletionPolicy,
+        deletionPolicy:   values.jobMode === 'import' || values.direction === 'bidir' ? 'backup' : values.deletionPolicy,
         reliability: {
           encryptionEnabled:  values.encryptionEnabled,
           encryptionKeyId:    values.encryptionKeyId || undefined,
@@ -1390,6 +1451,7 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
             <SourceDestPane
               job={job}
               isSync={isSync}
+              isImport={isImport}
               srcSaved={srcSaved}
               dstSaved={dstSaved}
               setSrcSaved={setSrcSaved}
@@ -1411,6 +1473,7 @@ export default function JobForm({ job, onSuccess, onCancel }: JobFormProps) {
           )}
           {pane === 'general' && (
             <GeneralPane
+              isImport={isImport}
               watch={watch}
               setValue={setValue}
               register={register}

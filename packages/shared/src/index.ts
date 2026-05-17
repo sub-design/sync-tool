@@ -66,6 +66,7 @@ export interface Endpoint {
 // ─────────────────────────────────────────────
 
 export type JobDirection      = 'ltr' | 'rtl' | 'bidir'
+export type JobMode          = 'sync' | 'import'
 export type JobStatus        = 'idle' | 'queued' | 'running' | 'completed' | 'cancelled' | 'error'
 export type TransferMode     = 'full' | 'delta' | 'auto'
 export type ConflictStrategy = 'newer-wins' | 'skip' | 'manual'
@@ -113,6 +114,7 @@ export interface Job {
   watch?:      boolean      // auto-trigger when local filesystem changes are observed
   schedule?:   string       // cron expression, e.g. "0 */6 * * *"
   autoOptions?: JobAutoOptions
+  jobMode?:    JobMode       // default: 'sync'
   status:      JobStatus
   lastRun?:    number       // unix ms
   lastError?:  string

@@ -58,6 +58,7 @@ export async function initDb(): Promise<void> {
       source                TEXT   NOT NULL,
       destination           TEXT   NOT NULL,
       direction             TEXT   NOT NULL DEFAULT 'ltr',
+      job_mode              TEXT   NOT NULL DEFAULT 'sync',
       transfer_mode         TEXT   DEFAULT 'auto',
       deletion_policy       TEXT   DEFAULT 'backup',
       reliability           TEXT   DEFAULT '{}',
@@ -150,6 +151,7 @@ export async function initDb(): Promise<void> {
   // Idempotent column additions (safe to run repeatedly)
   for (const stmt of [
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS transfer_mode TEXT DEFAULT 'auto'`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS job_mode TEXT NOT NULL DEFAULT 'sync'`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS deletion_policy TEXT DEFAULT 'backup'`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS reliability TEXT DEFAULT '{}'`,
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS source_device_id TEXT`,
@@ -201,6 +203,7 @@ function rowToJob(row: Record<string, unknown>): Job {
     source:              row.source as string,
     destination:         row.destination as string,
     direction:           row.direction as Job['direction'],
+    jobMode:             ((row.job_mode as string) ?? 'sync') as Job['jobMode'],
     transferMode:        ((row.transfer_mode as string) ?? 'auto') as Job['transferMode'],
     deletionPolicy:      ((row.deletion_policy as string) ?? 'backup') as Job['deletionPolicy'],
     reliability:         parseJson(row.reliability as string),
@@ -433,12 +436,12 @@ export const jobsDb = {
     const full: Job = { ...job, orgId: orgId ?? job.orgId, status: 'idle', createdAt: now, updatedAt: now }
     await sql`
       INSERT INTO jobs
-        (id, user_id, org_id, name, source, destination, direction, transfer_mode, deletion_policy, reliability,
+        (id, user_id, org_id, name, source, destination, direction, job_mode, transfer_mode, deletion_policy, reliability,
          source_device_id, destination_device_id, source_endpoint_id, destination_endpoint_id,
          watch, schedule, auto_options, status, created_at, updated_at)
       VALUES
         (${full.id}, ${userId}, ${full.orgId ?? null}, ${full.name}, ${full.source}, ${full.destination},
-         ${full.direction}, ${full.transferMode ?? 'auto'}, ${full.deletionPolicy ?? 'backup'}, ${JSON.stringify(full.reliability ?? {})},
+         ${full.direction}, ${full.jobMode ?? 'sync'}, ${full.transferMode ?? 'auto'}, ${full.deletionPolicy ?? 'backup'}, ${JSON.stringify(full.reliability ?? {})},
          ${full.sourceDeviceId ?? null}, ${full.destinationDeviceId ?? null},
          ${full.sourceEndpointId ?? null}, ${full.destinationEndpointId ?? null},
          ${full.watch ?? false}, ${full.schedule ?? null}, ${JSON.stringify(full.autoOptions ?? {})},
@@ -447,7 +450,7 @@ export const jobsDb = {
     return full
   },
 
-  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'transferMode' | 'deletionPolicy' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'sourceEndpointId' | 'destinationEndpointId' | 'watch' | 'schedule' | 'autoOptions'>>): Promise<Job | undefined> {
+  async update(id: string, patch: Partial<Pick<Job, 'name' | 'source' | 'destination' | 'direction' | 'jobMode' | 'transferMode' | 'deletionPolicy' | 'reliability' | 'sourceDeviceId' | 'destinationDeviceId' | 'sourceEndpointId' | 'destinationEndpointId' | 'watch' | 'schedule' | 'autoOptions'>>): Promise<Job | undefined> {
     const existing = await jobsDb.get(id)
     if (!existing) return undefined
     const updated: Job = { ...existing, ...patch, updatedAt: Date.now() }
@@ -457,6 +460,7 @@ export const jobsDb = {
         source = ${updated.source},
         destination = ${updated.destination},
         direction = ${updated.direction},
+        job_mode = ${updated.jobMode ?? 'sync'},
         transfer_mode = ${updated.transferMode ?? 'auto'},
         deletion_policy = ${updated.deletionPolicy ?? 'backup'},
         reliability = ${JSON.stringify(updated.reliability ?? {})},
