@@ -281,9 +281,11 @@ export interface DirEntry {
   modifiedAt?: number
 }
 
+export type JobTriggerReason = 'watch' | 'folder-connect' | 'logoff'
+
 export type AgentToServer =
   | { type: 'register';      deviceId: string; hostname: string; platform: string }
-  | { type: 'job:trigger';   jobId: string; reason: 'watch'; path?: string }
+  | { type: 'job:trigger';   jobId: string; reason: JobTriggerReason; path?: string }
   | { type: 'job:started';   jobId: string }
   | { type: 'job:progress';  progress: SyncProgress }
   | { type: 'job:file:done'; jobId: string; file: SyncFileEvent }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, Notification } from 'electron'
+import { app, BrowserWindow, ipcMain, nativeTheme, Notification, powerMonitor } from 'electron'
 import { join } from 'path'
 import { v4 as uuid } from 'uuid'
 import * as http from 'http'
@@ -8,7 +8,7 @@ import { createTray, rebuild as rebuildTray } from './tray'
 import { connect, disconnect, onStateChange, onJobNotification } from './ws-client'
 import { startAgent, onAgentStatusChange } from './agent-manager'
 import { setupAutoUpdater } from './updater'
-import type { AppConfig } from './config'
+import type { Job } from '@sync-tool/shared'
 
 // ── Single instance ────────────────────────────────────────────────────────────
 
@@ -49,6 +49,55 @@ function apiPost(url: string, body: unknown, token?: string): Promise<Record<str
     req.write(data)
     req.end()
   })
+}
+
+function apiGet<T>(url: string, token?: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url)
+    const mod    = parsed.protocol === 'https:' ? https : http
+    const req    = mod.request({
+      hostname: parsed.hostname,
+      port:     parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+      path:     parsed.pathname,
+      method:   'GET',
+      headers:  token ? { Authorization: `Bearer ${token}` } : {},
+    }, (res) => {
+      let raw = ''
+      res.on('data', (chunk: string) => { raw += chunk })
+      res.on('end', () => {
+        if ((res.statusCode ?? 500) >= 400) {
+          reject(new Error(`GET ${parsed.pathname} failed with ${res.statusCode}`))
+          return
+        }
+        try { resolve(JSON.parse(raw) as T) } catch { reject(new Error('Invalid JSON response')) }
+      })
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
+let logoffJobsTriggered = false
+
+async function triggerLogoffJobs(reason: string): Promise<void> {
+  if (logoffJobsTriggered) return
+  logoffJobsTriggered = true
+
+  const cfg = getConfig()
+  if (!cfg.agentToken || !cfg.apiUrl) return
+
+  try {
+    const jobs = await apiGet<Job[]>(`${cfg.apiUrl}/api/jobs`, cfg.agentToken)
+    const logoffJobs = jobs.filter((job) => job.autoOptions?.onLogoff)
+    await Promise.allSettled(logoffJobs.map((job) =>
+      apiPost(`${cfg.apiUrl}/api/jobs/${job.id}/run`, { reason: 'logoff' }, cfg.agentToken)
+    ))
+    if (logoffJobs.length > 0) {
+      console.log(`[app] Queued ${logoffJobs.length} logoff job(s) on ${reason}`)
+    }
+  } catch (err) {
+    console.warn(`[app] Failed to queue logoff jobs on ${reason}: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 // ── Preferences window ─────────────────────────────────────────────────────────
@@ -133,9 +182,17 @@ ipcMain.on('preferences:close', () => prefsWindow?.close())
 
 nativeTheme.on('updated', rebuildTray)
 
+app.on('before-quit', () => {
+  void triggerLogoffJobs('before-quit')
+})
+
 // ── App ready ──────────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
+  powerMonitor.on('shutdown', () => {
+    void triggerLogoffJobs('shutdown')
+  })
+
   // Ensure config exists and has a deviceId
   const cfg = loadConfig()
   if (!cfg.deviceId) {

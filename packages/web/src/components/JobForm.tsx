@@ -17,7 +17,7 @@ import EndpointPicker from '@/components/EndpointPicker'
 import * as api from '@/lib/api'
 import { validateEndpoint } from '@/lib/backend'
 import { endpointsApi } from '@/lib/endpoints'
-import { describeCron } from '@/lib/cron'
+import { describeCron, getNextCronRun } from '@/lib/cron'
 import type { JobPresetDefaults } from '@/jobPresets'
 import type { Job, JobTemplateDefaults } from '../types'
 
@@ -214,18 +214,43 @@ const TRIGGER_COLORS: Record<string, string> = {
   onstart:    '#7a4a8a',
 }
 
-function PreviewButton() {
+function PreviewButton({
+  schedule,
+  periodicEveryMinutes,
+  watchEnabled,
+  onFolderConnect,
+  onLogoff,
+  onStart,
+}: {
+  schedule: string
+  periodicEveryMinutes?: number
+  watchEnabled: boolean
+  onFolderConnect: boolean
+  onLogoff: boolean
+  onStart: boolean
+}) {
   const [open, setOpen] = useState(false)
 
-  const runs = [
-    { day: 'Today',    time: '09:00', dur: '~4 min',  trigger: 'schedule',  note: 'daily 09:00' },
-    { day: 'Today',    time: '09:30', dur: 'idle',    trigger: 'periodic',  note: 'every 30 min' },
-    { day: 'Today',    time: '10:00', dur: 'idle',    trigger: 'periodic' },
-    { day: 'Today',    time: '14:22', dur: '—',       trigger: 'folders',   note: 'when drive mounts' },
-    { day: 'Today',    time: '18:00', dur: 'skipped', trigger: 'periodic',  skipped: true, note: 'overlap' },
-    { day: 'Tomorrow', time: '09:00', dur: '~4 min',  trigger: 'schedule' },
-    { day: 'Tomorrow', time: '09:30', dur: 'idle',    trigger: 'periodic' },
-  ]
+  const nextRuns = useMemo(() => {
+    const runs: Array<{ at: number; trigger: string; note?: string }> = []
+    const nextCron = schedule ? getNextCronRun(schedule) : null
+    if (nextCron) runs.push({ at: nextCron, trigger: 'schedule', note: describeCron(schedule) })
+    if (periodicEveryMinutes && periodicEveryMinutes > 0) {
+      const now = Date.now()
+      runs.push(
+        { at: now + periodicEveryMinutes * 60_000, trigger: 'periodic', note: `every ${formatDuration(periodicEveryMinutes)}` },
+        { at: now + periodicEveryMinutes * 2 * 60_000, trigger: 'periodic', note: `every ${formatDuration(periodicEveryMinutes)}` },
+      )
+    }
+    return runs.sort((a, b) => a.at - b.at).slice(0, 5)
+  }, [periodicEveryMinutes, schedule])
+
+  const eventTriggers = [
+    watchEnabled ? 'File changes' : null,
+    onFolderConnect ? 'Folder connects' : null,
+    onLogoff ? 'Logoff / shutdown' : null,
+    onStart ? 'Sync service starts' : null,
+  ].filter(Boolean)
 
   return (
     <div className="relative flex-shrink-0">
@@ -249,11 +274,11 @@ function PreviewButton() {
                 <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                   Next runs
                 </span>
-                <span className="ml-auto text-[10px] text-muted-foreground">simulated</span>
+                <span className="ml-auto text-[10px] text-muted-foreground">from current settings</span>
               </div>
 
               <div className="flex flex-wrap gap-2 mb-3">
-                {(['schedule', 'periodic', 'filechange', 'folders'] as const).map(k => (
+                {(['schedule', 'periodic', 'filechange', 'folders', 'logoff', 'onstart'] as const).map(k => (
                   <span key={k} className="flex items-center gap-1 text-[10px] text-muted-foreground">
                     <span className="w-2 h-2 rounded-full inline-block" style={{ background: TRIGGER_COLORS[k] }} />
                     {k}
@@ -263,28 +288,29 @@ function PreviewButton() {
 
               <div className="relative max-h-72 overflow-y-auto">
                 <div className="absolute left-[7px] top-1.5 bottom-1.5 w-0.5 bg-border" />
-                {runs.map((r, i) => {
-                  const newDay = i === 0 || runs[i - 1].day !== r.day
+                {nextRuns.length === 0 && (
+                  <div className="pl-[22px] py-2 text-xs text-muted-foreground">
+                    No fixed-time runs configured.
+                  </div>
+                )}
+                {nextRuns.map((r, i) => {
+                  const day = formatRunDay(r.at)
+                  const newDay = i === 0 || formatRunDay(nextRuns[i - 1].at) !== day
                   return (
                     <div key={i}>
                       {newDay && (
                         <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground pl-[22px] pt-1.5 pb-1">
-                          {r.day}
+                          {day}
                         </div>
                       )}
-                      <div className={`flex items-start gap-2.5 py-1 relative ${r.skipped ? 'opacity-50' : ''}`}>
+                      <div className="flex items-start gap-2.5 py-1 relative">
                         <div
                           className="w-4 h-4 rounded-full bg-card border-2 flex-shrink-0 relative z-10 flex items-center justify-center"
                           style={{ borderColor: TRIGGER_COLORS[r.trigger] }}
-                        >
-                          {r.skipped && (
-                            <div className="w-2 h-[2px]" style={{ background: TRIGGER_COLORS[r.trigger] }} />
-                          )}
-                        </div>
+                        />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-baseline gap-1.5">
-                            <span className="font-mono text-xs font-medium">{r.time}</span>
-                            <span className="text-[10px] text-muted-foreground uppercase">{r.dur}</span>
+                            <span className="font-mono text-xs font-medium">{formatRunTime(r.at)}</span>
                           </div>
                           <div className="text-[11px] text-muted-foreground mt-0.5">
                             {r.trigger}{r.note ? ` · ${r.note}` : ''}
@@ -297,7 +323,9 @@ function PreviewButton() {
               </div>
 
               <div className="mt-3 p-2.5 bg-muted/50 border rounded text-[11px] text-muted-foreground leading-relaxed">
-                File-change runs fire reactively — not shown in the agenda.
+                {eventTriggers.length > 0
+                  ? `${eventTriggers.join(', ')}: event-based, no fixed time.`
+                  : 'No event-based triggers enabled.'}
               </div>
             </div>
           </div>
@@ -305,6 +333,27 @@ function PreviewButton() {
       )}
     </div>
   )
+}
+
+function formatRunTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatRunDay(ts: number): string {
+  const date = new Date(ts)
+  const today = new Date()
+  const tomorrow = new Date()
+  tomorrow.setDate(today.getDate() + 1)
+  if (date.toDateString() === today.toDateString()) return 'Today'
+  if (date.toDateString() === tomorrow.toDateString()) return 'Tomorrow'
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+function formatDuration(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return m === 0 ? `${h} h` : `${h} h ${m} min`
 }
 
 // ── ScheduleBuilder ───────────────────────────────────────────────────────────
@@ -689,18 +738,28 @@ function SchedulePane({ watch: watchField, setValue, register }: SchedulePanePro
   const unattended       = watchField('unattended') as boolean
   const autoClear        = watchField('autoClearTreeAfterSync') as boolean
   const scheduleEnabled  = Boolean(scheduleVal)
+  const periodicEveryMinutes = periodicEnabled
+    ? ((watchField('periodicHours') as number) * 60) + (watchField('periodicMinutes') as number)
+    : undefined
 
   return (
     <>
       <PaneHeader
         title="Schedule"
         subtitle="When this job should run on its own. Manual run is always available."
-        action={<PreviewButton />}
+        action={(
+          <PreviewButton
+            schedule={scheduleVal}
+            periodicEveryMinutes={periodicEveryMinutes}
+            watchEnabled={watchEnabled}
+            onFolderConnect={onFolderConnect}
+            onLogoff={onLogoff}
+            onStart={onStart}
+          />
+        )}
       />
 
-      <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-3">
-        Triggers
-      </div>
+      <SectionDivider label="Events" />
 
       <CompactTrigger
         name="When files change"
@@ -717,6 +776,16 @@ function SchedulePane({ watch: watchField, setValue, register }: SchedulePanePro
           <span className="text-xs text-muted-foreground">s</span>
         </SmallField>
       </CompactTrigger>
+
+      <CompactTrigger
+        name="When a folder connects"
+        enabled={onFolderConnect}
+        onToggle={() => setValue('onFolderConnect', !onFolderConnect, { shouldValidate: true })}
+      >
+        <p className="text-xs text-muted-foreground">Runs when a local source or destination folder becomes available.</p>
+      </CompactTrigger>
+
+      <SectionDivider label="Time" />
 
       <CompactTrigger
         name="Repeating interval"
@@ -762,13 +831,13 @@ function SchedulePane({ watch: watchField, setValue, register }: SchedulePanePro
         </div>
       </CompactTrigger>
 
-      <CompactTrigger
-        name="When a folder connects"
-        enabled={onFolderConnect}
-        onToggle={() => setValue('onFolderConnect', !onFolderConnect, { shouldValidate: true })}
-      >
-        <p className="text-xs text-muted-foreground">Runs when a mounted volume or folder becomes available.</p>
-      </CompactTrigger>
+      {scheduleEnabled && periodicEnabled && (
+        <div className="mb-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          This job can be queued by either time trigger; overlapping runs are skipped.
+        </div>
+      )}
+
+      <SectionDivider label="System lifecycle" />
 
       <CompactTrigger
         name="Before logoff / shutdown"
@@ -779,7 +848,7 @@ function SchedulePane({ watch: watchField, setValue, register }: SchedulePanePro
       </CompactTrigger>
 
       <CompactTrigger
-        name="On API start"
+        name="When sync service starts"
         enabled={onStart}
         onToggle={() => setValue('onStart', !onStart, { shouldValidate: true })}
       />

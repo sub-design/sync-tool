@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/requireAuth'
 import { auditRequest } from '../audit'
 import { buildEndpointUri } from './endpoints'
 import type { Job, ServerToAgent } from '@sync-tool/shared'
+import type { QueueReason } from '../triggers'
 
 /** Resolve sourceEndpointId / destinationEndpointId → real URIs, server-side. */
 async function resolveEndpoints(
@@ -44,7 +45,7 @@ async function withResolvedEndpoints(job: Job, userId: string, orgId?: string): 
 }
 
 export function createJobsRouter(
-  broadcast:        (msg: ServerToAgent) => void,
+  broadcast:        (msg: ServerToAgent, reason?: QueueReason) => void,
   sendToAgent:      (deviceId: string, msg: ServerToAgent) => boolean,
   pendingRollbacks: Map<string, number>,
   onJobsChanged:    () => void = () => {},
@@ -163,17 +164,21 @@ export function createJobsRouter(
     if (!job || job.orgId !== req.orgId) {
       res.status(404).json({ error: 'Job not found' }); return
     }
+    const reason: QueueReason = req.body?.reason === 'logoff' ? 'logoff' : 'manual'
+    if (reason === 'logoff' && !job.autoOptions?.onLogoff) {
+      res.status(400).json({ error: 'Logoff trigger is not enabled for this job' }); return
+    }
     if (job.status === 'running' || job.status === 'queued') {
       res.status(409).json({ error: 'Job is already running or queued' }); return
     }
     // Re-resolve named endpoint configs at run time so changes to an endpoint
     // propagate to all jobs that reference it without requiring a job edit.
     const resolvedJob = await withResolvedEndpoints(job, req.userId, req.orgId)
-    broadcast({ type: 'job:run', job: resolvedJob })
+    broadcast({ type: 'job:run', job: resolvedJob }, reason)
     auditRequest(req, 'job.run_requested', {
       targetType: 'job',
       targetId:   job.id,
-      metadata:   { name: job.name },
+      metadata:   { name: job.name, reason },
     })
     res.json({ ok: true, jobId: job.id })
   })
