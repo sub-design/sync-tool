@@ -24,6 +24,7 @@ export default function DeviceDetail() {
     queryKey: ['device', id],
     queryFn: () => api.getDevice(id!),
     enabled: !!id,
+    retry: false,
   })
 
   // Subscribe to WebSocket events for real-time device status updates

@@ -30,9 +30,14 @@ export function createDevicesRouter(): Router {
   })
 
   router.get('/:id', async (req, res) => {
-    const device = await usersDb.getDevice(req.params.id, req.orgId)
-    if (!device) { res.status(404).json({ error: 'Device not found' }); return }
-    res.json(device)
+    try {
+      const device = await usersDb.getDevice(req.params.id, req.orgId)
+      if (!device) { res.status(404).json({ error: 'Device not found' }); return }
+      res.json(device)
+    } catch (err) {
+      console.error('[devices] GET /:id error:', err)
+      res.status(500).json({ error: 'Internal server error' })
+    }
   })
 
   router.get('/:id/jobs', async (req, res) => {
@@ -115,39 +120,9 @@ export function createDevicesRouter(): Router {
     res.status(201).json({ id, name, token, expiresAt })
   })
 
-  router.post('/:id/rotate', createTokenRateLimit, async (req, res) => {
-    const existing = await usersDb.getToken(req.params.id, req.userId)
-    if (!existing) { res.status(404).json({ error: 'Token not found' }); return }
-
-    const { expiresInDays } = req.body ?? {}
-    const ttlDays = Number.isInteger(expiresInDays) && expiresInDays > 0 && expiresInDays <= 3650
-      ? expiresInDays
-      : DEFAULT_AGENT_TOKEN_TTL_DAYS
-    const id = uuid()
-    const token = randomToken()
-    const expiresAt = Date.now() + ttlDays * 24 * 60 * 60 * 1000
-
-    await usersDb.createToken(id, req.userId, existing.name, hashToken(token), expiresAt, existing.id, req.orgId)
-    await usersDb.revokeToken(existing.id, req.userId)
-    auditRequest(req, 'agent_token.rotated', {
-      targetType: 'agent_token',
-      targetId:   id,
-      metadata:   { rotatedFrom: existing.id, name: existing.name, expiresAt },
-    })
-    res.status(201).json({ id, name: existing.name, token, expiresAt })
-  })
-
-  router.delete('/:id', async (req, res) => {
-    const ok = await usersDb.revokeToken(req.params.id, req.userId)
-    if (!ok) { res.status(404).json({ error: 'Token not found' }); return }
-    auditRequest(req, 'agent_token.revoked', {
-      targetType: 'agent_token',
-      targetId:   req.params.id,
-    })
-    res.json({ ok: true })
-  })
-
   // ── Batch operations ─────────────────────────────────────────────────────────────
+  // Must be registered before /:id/rotate to avoid Express matching /batch/rotate
+  // as /:id/rotate with id="batch".
 
   router.post('/batch/delete', async (req, res) => {
     const ids = parseBatchIds(req.body)
@@ -224,6 +199,38 @@ export function createDevicesRouter(): Router {
       failed,
       results: results.map(r => r.status === 'fulfilled' ? r.value : { id: (r.reason as any)?.id, ok: false })
     })
+  })
+
+  router.post('/:id/rotate', createTokenRateLimit, async (req, res) => {
+    const existing = await usersDb.getToken(req.params.id, req.userId)
+    if (!existing) { res.status(404).json({ error: 'Token not found' }); return }
+
+    const { expiresInDays } = req.body ?? {}
+    const ttlDays = Number.isInteger(expiresInDays) && expiresInDays > 0 && expiresInDays <= 3650
+      ? expiresInDays
+      : DEFAULT_AGENT_TOKEN_TTL_DAYS
+    const id = uuid()
+    const token = randomToken()
+    const expiresAt = Date.now() + ttlDays * 24 * 60 * 60 * 1000
+
+    await usersDb.createToken(id, req.userId, existing.name, hashToken(token), expiresAt, existing.id, req.orgId)
+    await usersDb.revokeToken(existing.id, req.userId)
+    auditRequest(req, 'agent_token.rotated', {
+      targetType: 'agent_token',
+      targetId:   id,
+      metadata:   { rotatedFrom: existing.id, name: existing.name, expiresAt },
+    })
+    res.status(201).json({ id, name: existing.name, token, expiresAt })
+  })
+
+  router.delete('/:id', async (req, res) => {
+    const ok = await usersDb.revokeToken(req.params.id, req.userId)
+    if (!ok) { res.status(404).json({ error: 'Token not found' }); return }
+    auditRequest(req, 'agent_token.revoked', {
+      targetType: 'agent_token',
+      targetId:   req.params.id,
+    })
+    res.json({ ok: true })
   })
 
   return router
