@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  HardDrive, Server, Terminal, Network, CloudUpload, Lock,
+  HardDrive, Server,
   Plus, Pencil, Trash2, Loader2, MoreVertical, Circle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'

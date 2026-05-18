@@ -1,5 +1,5 @@
 import { HardDrive, Server, Terminal, Network, CloudUpload, Lock } from 'lucide-react'
-import type { BackendType, Endpoint, SavedEndpointConfig } from '../types'
+import type { BackendType, Endpoint } from '../types'
 
 export const TYPE_META: Record<BackendType, { label: string; icon: React.ReactNode; color: string }> = {
   local: { label: 'Local',  icon: <HardDrive  size={14} />, color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
