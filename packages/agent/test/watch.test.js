@@ -2,7 +2,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const test = require('node:test')
 
-const { JobWatcher, shouldIgnoreWatchPath, watchPathsForJob } = require('../dist/watch.js')
+const { FolderConnectMonitor, JobWatcher, folderConnectPathsForJob, shouldIgnoreWatchPath, watchPathsForJob } = require('../dist/watch.js')
 
 test('watchPathsForJob watches local paths for untargeted jobs', () => {
   const job = baseJob({
@@ -47,6 +47,22 @@ test('watchPathsForJob ignores disabled jobs and non-local URLs', () => {
   assert.deepEqual(watchPathsForJob(baseJob({ source: 'sftp://host/path', destination: '/tmp/destination', watch: true }), 'device-a'), [])
 })
 
+test('folderConnectPathsForJob uses local paths only when folder-connect is enabled', () => {
+  assert.deepEqual(folderConnectPathsForJob(baseJob({
+    source: '/tmp/source',
+    autoOptions: { onFolderConnect: true },
+  }), 'device-a'), ['/tmp/source'])
+  assert.deepEqual(folderConnectPathsForJob(baseJob({
+    source: '/tmp/source',
+    autoOptions: { onFolderConnect: false },
+  }), 'device-a'), [])
+  assert.deepEqual(folderConnectPathsForJob(baseJob({
+    source: 'sftp://host/path',
+    destination: '/tmp/destination',
+    autoOptions: { onFolderConnect: true },
+  }), 'device-a'), [])
+})
+
 test('shouldIgnoreWatchPath ignores sync metadata and partial files', () => {
   assert.equal(shouldIgnoreWatchPath(path.join('/tmp/root', '_syncdata_', '_saved_', 'file.txt')), true)
   assert.equal(shouldIgnoreWatchPath('/tmp/root/file.sync-tool-part.txt'), true)
@@ -86,6 +102,91 @@ test('JobWatcher coalesces event storms into one full scan trigger', async () =>
 
   assert.deepEqual(calls, [{ jobId: 'job-a', changedPath: undefined }])
   assert.ok(warnings.some((message) => message.includes('received 3 filesystem events')))
+})
+
+test('FolderConnectMonitor triggers once when a missing path becomes available', async () => {
+  const calls = []
+  const availability = new Map([['/tmp/source', false]])
+  const monitor = new FolderConnectMonitor('device-a', (jobId) => {
+    calls.push(jobId)
+  }, 60_000, 100, async (candidate) => availability.get(candidate) ?? false)
+
+  try {
+    monitor.sync([baseJob({ autoOptions: { onFolderConnect: true } })])
+    await delay(10)
+    availability.set('/tmp/source', true)
+    await monitor.pollNow()
+    await delay(130)
+
+    assert.deepEqual(calls, ['job'])
+  } finally {
+    monitor.close()
+  }
+})
+
+test('FolderConnectMonitor does not trigger for a path already available at startup', async () => {
+  const calls = []
+  const monitor = new FolderConnectMonitor('device-a', (jobId) => {
+    calls.push(jobId)
+  }, 60_000, 100, async () => true)
+
+  try {
+    monitor.sync([baseJob({ autoOptions: { onFolderConnect: true } })])
+    await delay(150)
+    await monitor.pollNow()
+    await delay(150)
+
+    assert.deepEqual(calls, [])
+  } finally {
+    monitor.close()
+  }
+})
+
+test('FolderConnectMonitor does not retrigger while a path remains available', async () => {
+  const calls = []
+  const availability = new Map([['/tmp/source', false]])
+  const monitor = new FolderConnectMonitor('device-a', (jobId) => {
+    calls.push(jobId)
+  }, 60_000, 100, async (candidate) => availability.get(candidate) ?? false)
+
+  try {
+    monitor.sync([baseJob({ autoOptions: { onFolderConnect: true } })])
+    await delay(10)
+    availability.set('/tmp/source', true)
+    await monitor.pollNow()
+    await monitor.pollNow()
+    await monitor.pollNow()
+    await delay(130)
+
+    assert.deepEqual(calls, ['job'])
+  } finally {
+    monitor.close()
+  }
+})
+
+test('FolderConnectMonitor retriggers after a path disappears and reappears', async () => {
+  const calls = []
+  const availability = new Map([['/tmp/source', false]])
+  const monitor = new FolderConnectMonitor('device-a', (jobId) => {
+    calls.push(jobId)
+  }, 60_000, 100, async (candidate) => availability.get(candidate) ?? false)
+
+  try {
+    monitor.sync([baseJob({ autoOptions: { onFolderConnect: true } })])
+    await delay(10)
+    availability.set('/tmp/source', true)
+    await monitor.pollNow()
+    await delay(130)
+    availability.set('/tmp/source', false)
+    await monitor.pollNow()
+    availability.set('/tmp/source', true)
+    await monitor.pollNow()
+    await delay(130)
+
+    assert.deepEqual(calls, ['job', 'job'])
+  } finally {
+    monitor.close()
+  }
 })
 
 function baseJob(overrides) {

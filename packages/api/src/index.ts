@@ -18,6 +18,7 @@ import { hitRateLimit } from './rateLimit'
 import { auditRequest, auditSystem } from './audit'
 import { notifyJob } from './notifications'
 import { schedulerPollMs, shouldRunInterval, shouldRunNow } from './scheduler'
+import { canTriggerJob, type QueueReason } from './triggers'
 import type { AgentToServer, ServerToAgent, ServerToBrowser, Job, DirEntry } from '@sync-tool/shared'
 
 const PORT = parseInt(process.env.PORT ?? '3001', 10)
@@ -179,7 +180,7 @@ async function broadcastJobRun(job: Job) {
   console.warn(`[api] No agents online — job ${job.id} not dispatched`)
 }
 
-async function queueJob(job: Job, reason: 'manual' | 'schedule' | 'watch' | 'startup'): Promise<boolean> {
+async function queueJob(job: Job, reason: QueueReason): Promise<boolean> {
   if (job.status === 'running' || job.status === 'queued') return false
   await jobsDb.setStatus(job.id, 'queued')
   const queued = { ...job, status: 'queued' as const }
@@ -201,7 +202,7 @@ async function sendWatchConfig(conn: AgentConn): Promise<void> {
   const all  = conn.orgId
     ? await jobsDb.listForOrg(conn.orgId)
     : await jobsDb.listForUser(conn.userId)
-  const jobs = all.filter((j) => j.watch)
+  const jobs = all.filter((j) => j.watch || j.autoOptions?.onFolderConnect)
   conn.ws.send(JSON.stringify({ type: 'jobs:watch', jobs } satisfies ServerToAgent))
 }
 
@@ -276,7 +277,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
       }
       case 'job:trigger': {
         const job = await jobsDb.get(msg.jobId)
-        if (job?.watch) await queueJob(job, msg.reason)
+        if (canTriggerJob(job, msg.reason)) await queueJob(job, msg.reason)
         break
       }
       case 'job:started': {
@@ -445,8 +446,8 @@ app.use('/api/endpoints', createEndpointsRouter())
 app.use('/api/job-templates', createJobTemplatesRouter())
 app.use('/api/collections',  createCollectionsRouter())
 app.use('/api/jobs',    createJobsRouter(
-  async (msg) => {
-    if (msg.type === 'job:run')    await queueJob(msg.job, 'manual')
+  async (msg, reason = 'manual') => {
+    if (msg.type === 'job:run')    await queueJob(msg.job, reason)
     if (msg.type === 'job:cancel') {
       broadcastJobCancel(msg.jobId)
       broadcastToBrowsers({ type: 'job:cancelled', jobId: msg.jobId })

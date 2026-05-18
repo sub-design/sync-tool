@@ -12,7 +12,7 @@ import { assertAllowedLocalEndpoint, assertAllowedPath } from './fileGuard'
 import { RelayClient } from './relayClient'
 import { canRunRemoteDelta, isRemoteDeltaJob, registerRemoteDeltaHandlers, runRemoteDeltaSync } from './delta/remote'
 import { stateDb } from './state'
-import { JobWatcher } from './watch'
+import { FolderConnectMonitor, JobWatcher } from './watch'
 import { LanDiscovery, getLanScope } from './lanDiscovery'
 import { PeerServer } from './peerServer'
 import type { AgentToServer, ServerToAgent, Job, DirEntry } from '@sync-tool/shared'
@@ -75,6 +75,11 @@ const watcher = new JobWatcher(DEVICE_ID, (jobId, changedPath) => {
   send(activeWs, { type: 'job:trigger', jobId, reason: 'watch', path: changedPath })
 })
 
+const folderConnectMonitor = new FolderConnectMonitor(DEVICE_ID, (jobId) => {
+  if (!activeWs || activeWs.readyState !== WebSocket.OPEN) return
+  send(activeWs, { type: 'job:trigger', jobId, reason: 'folder-connect' })
+})
+
 // ── WebSocket connection ──────────────────────────────────────────────────────
 
 function connect() {
@@ -104,6 +109,7 @@ function connect() {
 
       case 'jobs:watch':
         watcher.sync(msg.jobs)
+        folderConnectMonitor.sync(msg.jobs)
         break
 
       case 'job:run':

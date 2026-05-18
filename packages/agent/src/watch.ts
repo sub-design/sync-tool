@@ -1,4 +1,5 @@
 import chokidar, { type FSWatcher } from 'chokidar'
+import fs from 'fs'
 import path from 'path'
 import type { Job } from '@sync-tool/shared'
 import { resolvePathVariables, resolveUserPath } from './pathVariables'
@@ -7,6 +8,8 @@ type TriggerJob = (jobId: string, changedPath?: string) => void
 
 const DEFAULT_WATCH_DEBOUNCE_MS = 1_500
 const DEFAULT_WATCH_STORM_EVENT_THRESHOLD = 1_000
+const DEFAULT_FOLDER_CONNECT_POLL_MS = 5_000
+const DEFAULT_FOLDER_CONNECT_DEBOUNCE_MS = 1_000
 
 export class JobWatcher {
   private readonly watchers = new Map<string, FSWatcher>()
@@ -110,6 +113,101 @@ export class JobWatcher {
   }
 }
 
+type IsPathAvailable = (path: string) => Promise<boolean>
+
+export class FolderConnectMonitor {
+  private readonly jobs = new Map<string, { job: Job; paths: string[] }>()
+  private readonly availability = new Map<string, boolean>()
+  private readonly timers = new Map<string, NodeJS.Timeout>()
+  private interval?: NodeJS.Timeout
+  private polling = false
+
+  constructor(
+    private readonly deviceId: string,
+    private readonly triggerJob: TriggerJob,
+    private readonly pollMs = Math.max(1_000, parseInt(process.env.FOLDER_CONNECT_POLL_MS ?? String(DEFAULT_FOLDER_CONNECT_POLL_MS), 10)),
+    private readonly debounceMs = Math.max(100, parseInt(process.env.FOLDER_CONNECT_DEBOUNCE_MS ?? String(DEFAULT_FOLDER_CONNECT_DEBOUNCE_MS), 10)),
+    private readonly isPathAvailable: IsPathAvailable = defaultIsPathAvailable,
+  ) {}
+
+  sync(jobs: Job[]): void {
+    const wanted = new Map<string, { job: Job; paths: string[] }>()
+    for (const job of jobs) {
+      const paths = folderConnectPathsForJob(job, this.deviceId)
+      if (paths.length > 0) wanted.set(job.id, { job, paths })
+    }
+
+    for (const jobId of this.jobs.keys()) {
+      if (wanted.has(jobId)) continue
+      this.jobs.delete(jobId)
+      this.clearTimer(jobId)
+      for (const key of this.availability.keys()) {
+        if (key.startsWith(`${jobId}\0`)) this.availability.delete(key)
+      }
+    }
+
+    for (const [jobId, entry] of wanted) {
+      this.jobs.set(jobId, entry)
+    }
+
+    if (this.jobs.size > 0 && !this.interval) {
+      this.interval = setInterval(() => {
+        void this.pollNow()
+      }, this.pollMs)
+      this.interval.unref()
+      void this.pollNow()
+    } else if (this.jobs.size === 0 && this.interval) {
+      clearInterval(this.interval)
+      this.interval = undefined
+    }
+  }
+
+  async pollNow(): Promise<void> {
+    if (this.polling) return
+    this.polling = true
+    try {
+      for (const [jobId, { paths }] of this.jobs) {
+        let becameAvailable = false
+        for (const candidate of paths) {
+          const key = availabilityKey(jobId, candidate)
+          const wasAvailable = this.availability.get(key)
+          const available = await this.isPathAvailable(candidate)
+          this.availability.set(key, available)
+          if (wasAvailable === false && available) becameAvailable = true
+        }
+        if (becameAvailable) this.scheduleTrigger(jobId)
+      }
+    } finally {
+      this.polling = false
+    }
+  }
+
+  close(): void {
+    if (this.interval) clearInterval(this.interval)
+    this.interval = undefined
+    this.jobs.clear()
+    this.availability.clear()
+    for (const jobId of this.timers.keys()) this.clearTimer(jobId)
+  }
+
+  private scheduleTrigger(jobId: string): void {
+    this.clearTimer(jobId)
+    const timer = setTimeout(() => {
+      this.timers.delete(jobId)
+      console.log(`[folder-connect] Folder became available for job ${jobId}`)
+      this.triggerJob(jobId)
+    }, this.debounceMs)
+    timer.unref()
+    this.timers.set(jobId, timer)
+  }
+
+  private clearTimer(jobId: string): void {
+    const timer = this.timers.get(jobId)
+    if (timer) clearTimeout(timer)
+    this.timers.delete(jobId)
+  }
+}
+
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback
   const parsed = Number.parseInt(raw, 10)
@@ -118,7 +216,15 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
 
 export function watchPathsForJob(job: Job, deviceId: string): string[] {
   if (!job.watch) return []
+  return localPathsForJob(job, deviceId)
+}
 
+export function folderConnectPathsForJob(job: Job, deviceId: string): string[] {
+  if (!job.autoOptions?.onFolderConnect) return []
+  return localPathsForJob(job, deviceId)
+}
+
+function localPathsForJob(job: Job, deviceId: string): string[] {
   const candidates: string[] = []
   if (job.direction === 'ltr' || job.direction === 'bidir') {
     if (!job.sourceDeviceId || job.sourceDeviceId === deviceId) candidates.push(job.source)
@@ -145,4 +251,17 @@ export function shouldIgnoreWatchPath(candidatePath: string): boolean {
   return normalized.includes('/_syncdata_/')
     || normalized.endsWith('.sync-tool-part')
     || normalized.includes('.sync-tool-part.')
+}
+
+async function defaultIsPathAvailable(candidatePath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(candidatePath, fs.constants.R_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function availabilityKey(jobId: string, candidatePath: string): string {
+  return `${jobId}\0${candidatePath}`
 }
