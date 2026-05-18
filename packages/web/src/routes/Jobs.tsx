@@ -233,8 +233,16 @@ export default function Jobs() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
-        <DialogContent className={creationChoice ? 'sm:max-w-5xl' : 'sm:max-w-3xl'}>
-          <DialogTitle>{creationChoice ? (selectedPreset ? `New job from: ${selectedPreset.name}` : selectedTemplate ? `New job from template: ${selectedTemplate.name}` : 'New blank job') : 'Choose a job template'}</DialogTitle>
+        <DialogContent
+          className={
+            creationChoice
+              ? 'gap-0 overflow-hidden p-0 sm:max-w-6xl [&>button]:right-5 [&>button]:top-5'
+              : 'sm:max-w-3xl'
+          }
+        >
+          <DialogTitle className={creationChoice ? 'border-b px-5 py-4 pr-12 text-base' : undefined}>
+            {creationChoice ? (selectedPreset ? `New job from: ${selectedPreset.name}` : selectedTemplate ? `New job from template: ${selectedTemplate.name}` : 'New blank job') : 'Choose a job template'}
+          </DialogTitle>
           {!creationChoice ? (
             <PresetPicker templates={templates} onSelect={setCreationChoice} />
           ) : (

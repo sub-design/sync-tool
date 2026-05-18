@@ -569,8 +569,8 @@ export default function JobDetail() {
 
             {/* Edit dialog */}
             <Dialog open={editOpen} onOpenChange={setEditOpen}>
-              <DialogContent className="sm:max-w-5xl">
-                <DialogTitle>Edit job</DialogTitle>
+              <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-6xl [&>button]:right-5 [&>button]:top-5">
+                <DialogTitle className="border-b px-5 py-4 pr-12 text-base">Edit job</DialogTitle>
                 <JobForm
                   job={job}
                   onSuccess={() => { setEditOpen(false); queryClient.invalidateQueries({ queryKey: ['job', id] }) }}
