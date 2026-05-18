@@ -4,7 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Cron } from 'croner'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeftRight, ArrowRight, CheckIcon, Clock, Images, Loader2, Server } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, Clock, Loader2, Server } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,12 +12,6 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import EndpointPicker from '@/components/EndpointPicker'
 import * as api from '@/lib/api'
@@ -154,7 +148,7 @@ function NavRail({ active, setActive, scheduleTriggerCount }: {
   scheduleTriggerCount: number
 }) {
   return (
-    <nav className="w-[200px] shrink-0 border-r overflow-y-auto py-3 px-2 text-sm bg-muted/30">
+    <nav className="w-[176px] shrink-0 border-r overflow-y-auto px-2 py-3 text-sm bg-muted/30">
       {NAV.map((n, i) => {
         if (n.kind === 'group') {
           return (
@@ -170,7 +164,7 @@ function NavRail({ active, setActive, scheduleTriggerCount }: {
             type="button"
             onClick={() => setActive(n.id)}
             className={[
-              'flex w-full items-center gap-2 rounded-md mb-px text-sm transition-colors',
+              'flex w-full items-center gap-2 rounded-md mb-px text-[13px] transition-colors',
               n.indent ? 'pl-[22px] pr-2.5 py-1.5' : 'px-2.5 py-1.5',
               isActive
                 ? 'bg-background font-medium text-foreground shadow-sm border-l-2 border-l-primary pl-[calc(10px-2px)]'
@@ -199,9 +193,9 @@ function PaneHeader({ title, subtitle, action }: {
   action?: React.ReactNode
 }) {
   return (
-    <div className="flex items-start gap-3 mb-5">
+    <div className="flex items-start gap-3 mb-4">
       <div className="flex-1 min-w-0">
-        <h2 className="text-[17px] font-semibold tracking-tight">{title}</h2>
+        <h2 className="text-base font-semibold tracking-tight">{title}</h2>
         {subtitle && <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{subtitle}</p>}
       </div>
       {action}
@@ -937,78 +931,67 @@ function SourceDestPane({
   isSync, isImport, srcSaved, dstSaved, setSrcSaved, setDstSaved,
   endpoints, control, watch, setValue, errors, register,
 }: SourceDestPaneProps) {
-  const jobMode = watch('jobMode')
-
-  function selectMode(mode: 'sync' | 'import') {
-    setValue('jobMode', mode, { shouldValidate: true })
-    if (mode === 'import') {
-      setValue('direction', 'ltr', { shouldValidate: true })
-      setValue('transferMode', 'full', { shouldValidate: true })
-      setValue('deletionPolicy', 'backup', { shouldValidate: true })
-      setValue('encryptionEnabled', false, { shouldValidate: true })
-      setValue('destinationLayout', 'byCaptureDate', { shouldValidate: true })
-      setValue('dateSource', 'exifThenMtime', { shouldValidate: true })
-      setValue('collisionPolicy', 'skipSameErrorDifferent', { shouldValidate: true })
+  function selectDirection(direction: 'ltr' | 'bidir') {
+    if (isImport && direction === 'bidir') {
+      setValue('jobMode', 'sync', { shouldValidate: true })
+      setValue('transferMode', 'auto', { shouldValidate: true })
     }
+    setValue('direction', direction, { shouldValidate: true })
   }
 
   return (
     <>
       <PaneHeader
         title="Source & Destination"
-        subtitle={isImport ? 'Import media into date-based folders.' : 'Where files come from and where they go.'}
+        subtitle="Choose the transfer direction and folders."
       />
 
       {/* Name */}
-      <div className="flex flex-col gap-1.5 mb-5">
+      <div className="flex flex-col gap-1.5 mb-4">
         <Label htmlFor="jf-name">Job name</Label>
         <Input id="jf-name" placeholder="Documents backup" {...register('name')} />
         {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 mb-5">
-        <button
-          type="button"
-          onClick={() => selectMode('sync')}
-          className={[
-            'rounded-md border p-3 text-left transition-colors hover:bg-accent',
-            jobMode === 'sync' ? 'border-primary bg-secondary' : 'border-border',
-          ].join(' ')}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2 font-medium text-sm">
-              <ArrowLeftRight size={16} />
-              Sync
-            </span>
-            {jobMode === 'sync' && <CheckIcon size={14} />}
-          </div>
-          <p className="text-xs text-muted-foreground mt-1">
-            Sync or backup folders with the existing transfer rules.
+      <div className="mb-4 flex flex-col gap-3 rounded-md border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Transfer direction</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {isSync
+              ? 'Changes flow both ways between the left and right folders.'
+              : 'Files copy one way from Source to Destination.'}
           </p>
-        </button>
-        <button
-          type="button"
-          onClick={() => selectMode('import')}
-          className={[
-            'rounded-md border p-3 text-left transition-colors hover:bg-accent',
-            jobMode === 'import' ? 'border-primary bg-secondary' : 'border-border',
-          ].join(' ')}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-2 font-medium text-sm">
-              <Images size={16} />
-              Import
-            </span>
-            {jobMode === 'import' && <CheckIcon size={14} />}
-          </div>
-          <p className="text-xs text-muted-foreground mt-1">
-            Copy photos and videos into folders by capture date.
-          </p>
-        </button>
+        </div>
+        <div className="grid shrink-0 grid-cols-2 rounded-md border bg-background p-0.5">
+          <button
+            type="button"
+            aria-pressed={!isSync}
+            onClick={() => selectDirection('ltr')}
+            className={[
+              'flex items-center justify-center gap-1.5 rounded-[5px] px-3 py-1.5 text-sm transition-colors',
+              !isSync ? 'bg-secondary font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+            ].join(' ')}
+          >
+            <ArrowRight size={14} />
+            Backup
+          </button>
+          <button
+            type="button"
+            aria-pressed={isSync}
+            onClick={() => selectDirection('bidir')}
+            className={[
+              'flex items-center justify-center gap-1.5 rounded-[5px] px-3 py-1.5 text-sm transition-colors',
+              isSync ? 'bg-secondary font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+            ].join(' ')}
+          >
+            <ArrowLeftRight size={14} />
+            Sync
+          </button>
+        </div>
       </div>
 
       {/* Two-panel folder picker */}
-      <div className="flex items-start gap-3">
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
         <div className="flex-1 min-w-0">
           <EndpointModeToggle
             label={isSync && !isImport ? 'Left Folder' : 'Source Folder'}
@@ -1036,61 +1019,15 @@ function SourceDestPane({
           {errors.source && <p className="text-xs text-destructive mt-1">{errors.source.message}</p>}
         </div>
 
-        {/* Direction selector */}
-        {!isImport && <div className="flex flex-col items-center gap-1 pt-6 shrink-0">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="flex flex-col items-center gap-1.5 rounded-lg p-2 hover:bg-accent transition-colors focus:outline-none"
-              >
-                <div className="size-10 rounded-full border-2 border-border flex items-center justify-center bg-background">
-                  {isSync
-                    ? <ArrowLeftRight size={16} className="text-foreground" />
-                    : <ArrowRight     size={16} className="text-foreground" />
-                  }
-                </div>
-                <span className="text-xs text-muted-foreground">{isSync ? 'Sync' : 'Backup'}</span>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="center" className="w-64 p-1" sideOffset={8}>
-              <DropdownMenuItem
-                className="flex items-start gap-3 rounded-md p-3 cursor-pointer"
-                onClick={() => setValue('direction', 'ltr', { shouldValidate: true })}
-              >
-                <div className="mt-0.5 size-5 flex items-center justify-center shrink-0">
-                  <ArrowRight size={16} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-sm">Backup</span>
-                    {!isSync && <CheckIcon size={14} className="text-foreground shrink-0" />}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Copy files and folders from Source to Destination.
-                  </p>
-                </div>
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="flex items-start gap-3 rounded-md p-3 cursor-pointer"
-                onClick={() => setValue('direction', 'bidir', { shouldValidate: true })}
-              >
-                <div className="mt-0.5 size-5 flex items-center justify-center shrink-0">
-                  <ArrowLeftRight size={16} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-medium text-sm">Sync</span>
-                    {isSync && <CheckIcon size={14} className="text-foreground shrink-0" />}
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Propagate changes between Left and Right folders.
-                  </p>
-                </div>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>}
+        <div className="flex flex-col items-center gap-1 self-center shrink-0" aria-hidden="true">
+          <div className="size-10 rounded-full border-2 border-border flex items-center justify-center bg-background">
+            {isSync
+              ? <ArrowLeftRight size={16} className="text-foreground" />
+              : <ArrowRight size={16} className="text-foreground" />
+            }
+          </div>
+          <span className="text-xs text-muted-foreground">{isSync ? 'Sync' : 'Backup'}</span>
+        </div>
 
         <div className="flex-1 min-w-0">
           <EndpointModeToggle
@@ -1647,11 +1584,15 @@ export default function JobForm({ job, presetDefaults, presetLabel, templateId, 
   }
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col overflow-hidden" style={{ height: 640 }}>
+    <form
+      onSubmit={handleSubmit(onSubmit)}
+      className="flex min-h-[520px] flex-col overflow-hidden"
+      style={{ height: 'min(680px, calc(100vh - 8.5rem))' }}
+    >
       <div className="flex flex-1 overflow-hidden">
         <NavRail active={pane} setActive={setPane} scheduleTriggerCount={scheduleTriggerCount} />
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-5">
           {!job && presetLabel && (
             <div className="mb-4 flex items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2">
               <div className="flex items-center gap-2 text-sm">
@@ -1710,7 +1651,7 @@ export default function JobForm({ job, presetDefaults, presetLabel, templateId, 
       </div>
 
       {/* Footer */}
-      <div className="border-t px-5 py-3 flex items-center gap-3 shrink-0">
+      <div className="border-t px-5 py-3 flex items-center gap-3 shrink-0 bg-background">
         {job && (
           <Button type="button" variant="outline" size="sm">
             ▶ Run now

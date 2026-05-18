@@ -158,7 +158,7 @@ export default function EndpointPicker({ label, value, onChange, deviceId, onDev
             /* Empty placeholder */
             <div
               className={[
-                'flex-1 flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed p-8 min-h-[280px] transition-colors',
+                'flex-1 flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-6 transition-colors',
                 isDragOver ? 'border-primary bg-primary/5' : 'border-border',
               ].join(' ')}
               onDragOver={handleDragOver}
@@ -324,7 +324,7 @@ function SelectedFolderPanel({
       {/* Visual drop zone */}
       <div
         className={[
-          'flex flex-col items-center justify-center gap-3 rounded-xl border-2 p-6 min-h-[200px] transition-colors',
+          'flex min-h-[168px] flex-col items-center justify-center gap-3 rounded-lg border-2 p-5 transition-colors',
           isDragOver
             ? 'border-primary bg-primary/5'
             : 'border-border bg-accent/20',
