@@ -214,10 +214,27 @@ async function runJob(job: Job, onProgress: (progress: any) => void, signal: Abo
   }
 
   if (isRemoteDeltaJob(job)) {
-    throw new Error('Remote delta job requires connected relay and matching source/destination device ids')
+    throw new Error(remoteDeltaReadinessError(job))
   }
 
   return runLocalSync(job, onProgress, signal, onFileDone)
+}
+
+function remoteDeltaReadinessError(job: Job): string {
+  const expected = job.direction === 'rtl' ? job.destinationDeviceId : job.sourceDeviceId
+  const relayStatus = !RELAY_URL
+    ? 'not configured'
+    : relay?.isReady()
+      ? 'connected'
+      : 'configured but not connected'
+  return [
+    'Remote delta job cannot start.',
+    `relay=${relayStatus}`,
+    `localDeviceId=${DEVICE_ID}`,
+    `expectedInitiatorDeviceId=${expected ?? 'none'}`,
+    `sourceDeviceId=${job.sourceDeviceId ?? 'none'}`,
+    `destinationDeviceId=${job.destinationDeviceId ?? 'none'}`,
+  ].join(' ')
 }
 
 async function runLocalSync(job: Job, onProgress: (progress: any) => void, signal: AbortSignal, onFileDone?: (file: SyncFileEvent) => void) {

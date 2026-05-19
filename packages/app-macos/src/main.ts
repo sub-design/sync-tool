@@ -6,7 +6,7 @@ import * as https from 'https'
 import { loadConfig, saveConfig, getConfig } from './config'
 import { createTray, rebuild as rebuildTray } from './tray'
 import { connect, disconnect, onStateChange, onJobNotification } from './ws-client'
-import { startAgent, onAgentStatusChange } from './agent-manager'
+import { startAgent, restartAgent, onAgentStatusChange } from './agent-manager'
 import { setupAutoUpdater } from './updater'
 import type { Job } from '@sync-tool/shared'
 
@@ -112,7 +112,7 @@ function openPreferences(): void {
 
   prefsWindow = new BrowserWindow({
     width:           460,
-    height:          420,
+    height:          520,
     resizable:       false,
     minimizable:     false,
     maximizable:     false,
@@ -137,8 +137,8 @@ function openPreferences(): void {
 
 ipcMain.handle('config:get', () => getConfig())
 
-ipcMain.handle('config:login', async (_event, { apiUrl, email, password, deviceName }: {
-  apiUrl: string; email: string; password: string; deviceName: string
+ipcMain.handle('config:login', async (_event, { apiUrl, email, password, deviceName, relayUrl, relayToken }: {
+  apiUrl: string; email: string; password: string; deviceName: string; relayUrl?: string; relayToken?: string
 }) => {
   const loginRes = await apiPost(`${apiUrl}/api/auth/login`, { email, password })
   if (loginRes.error) throw new Error(loginRes.error as string)
@@ -155,6 +155,8 @@ ipcMain.handle('config:login', async (_event, { apiUrl, email, password, deviceN
     agentToken: deviceRes.token as string,
     deviceName,
     deviceId:   cfg.deviceId || uuid(),
+    relayUrl:   relayUrl ?? cfg.relayUrl,
+    relayToken: relayToken ?? cfg.relayToken,
     email,
   })
   disconnect()
@@ -173,6 +175,14 @@ ipcMain.handle('config:signout', () => {
 
 ipcMain.handle('config:save-device-name', (_event, deviceName: string) => {
   saveConfig({ ...getConfig(), deviceName })
+  rebuildTray()
+})
+
+ipcMain.handle('config:save-network-settings', (_event, { deviceName, relayUrl, relayToken }: {
+  deviceName: string; relayUrl: string; relayToken: string
+}) => {
+  saveConfig({ ...getConfig(), deviceName, relayUrl, relayToken })
+  restartAgent()
   rebuildTray()
 })
 

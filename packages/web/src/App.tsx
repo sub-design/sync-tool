@@ -14,6 +14,7 @@ import Login from './routes/Login'
 import Download from './routes/Download'
 import Audit from './routes/Audit'
 import Endpoints from './routes/Endpoints'
+import EndpointDetail from './routes/EndpointDetail'
 import OrgSettings from './routes/OrgSettings'
 import Analytics from './routes/Analytics'
 import Templates from './routes/Templates'
@@ -45,6 +46,7 @@ export default function App() {
               <Route path="/devices" element={<RequireAuth><Devices /></RequireAuth>} />
               <Route path="/devices/:id" element={<RequireAuth><DeviceDetail /></RequireAuth>} />
               <Route path="/endpoints" element={<RequireAuth><Endpoints /></RequireAuth>} />
+              <Route path="/endpoints/:id" element={<RequireAuth><EndpointDetail /></RequireAuth>} />
               <Route path="/audit" element={<RequireAuth><Audit /></RequireAuth>} />
               <Route path="/org-settings" element={<RequireAuth><OrgSettings /></RequireAuth>} />
               <Route path="/analytics" element={<RequireAuth><Analytics /></RequireAuth>} />

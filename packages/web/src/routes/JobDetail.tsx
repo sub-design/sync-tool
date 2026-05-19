@@ -34,7 +34,8 @@ import { useWsStore, subscribe } from '@/lib/ws'
 import { formatRelative, formatAbsolute, formatTimeUntil, formatDuration, formatBytes } from '@/lib/format'
 import { describeCron, getNextCronRun } from '@/lib/cron'
 import * as api from '@/lib/api'
-import type { JobDirection, JobStatus } from '../types'
+import { endpointsApi } from '@/lib/endpoints'
+import type { JobDirection, JobStatus, Endpoint } from '../types'
 
 const DIRECTION_LABEL: Record<JobDirection, string> = {
   ltr:   'Left → Right (backup)',
@@ -137,6 +138,14 @@ export default function JobDetail() {
     enabled: !!id,
   })
 
+  const { data: endpoints = [] } = useQuery<Endpoint[]>({
+    queryKey: ['endpoints'],
+    queryFn: endpointsApi.list,
+  })
+
+  const srcEndpoint  = job?.sourceEndpointId      ? endpoints.find(e => e.id === job.sourceEndpointId)      : undefined
+  const dstEndpoint  = job?.destinationEndpointId  ? endpoints.find(e => e.id === job.destinationEndpointId) : undefined
+
   useEffect(() => {
     if (!id) return
     const invalidate = () => {
@@ -232,9 +241,9 @@ export default function JobDetail() {
               <div className="flex-1 min-w-0">
                 <h1 className="text-xl font-semibold">{job.name}</h1>
                 <div className="mt-1 text-sm text-muted-foreground">
-                  <span className="font-mono">{job.source}</span>
+                  <span className={srcEndpoint ? undefined : 'font-mono'}>{srcEndpoint ? srcEndpoint.name : job.source}</span>
                   <span className="mx-2">→</span>
-                  <span className="font-mono">{job.destination}</span>
+                  <span className={dstEndpoint ? undefined : 'font-mono'}>{dstEndpoint ? dstEndpoint.name : job.destination}</span>
                 </div>
                 <div className={`mt-2 flex items-center gap-1.5 text-sm ${statusColor}`}>
                   {statusIcon}
@@ -297,9 +306,9 @@ export default function JobDetail() {
                     <div className="p-5 space-y-4">
                       <dl className="grid gap-2 text-sm" style={{ gridTemplateColumns: '120px 1fr' }}>
                         <dt className="text-muted-foreground">Source:</dt>
-                        <dd className="font-mono break-all">{job.source}</dd>
+                        <dd className="font-mono break-all">{srcEndpoint ? srcEndpoint.name : job.source}</dd>
                         <dt className="text-muted-foreground">Destination:</dt>
-                        <dd className="font-mono break-all">{job.destination}</dd>
+                        <dd className="font-mono break-all">{dstEndpoint ? dstEndpoint.name : job.destination}</dd>
                         {job.lastError && (
                           <>
                             <dt className="text-muted-foreground">Error:</dt>
@@ -433,11 +442,33 @@ export default function JobDetail() {
                     <dt className="text-muted-foreground">Job type:</dt>
                     <dd>{job.jobMode === 'import' ? 'Import by date' : DIRECTION_LABEL[job.direction]}</dd>
 
-                    <dt className="text-muted-foreground">Source:</dt>
-                    <dd className="font-mono break-all">{job.source}</dd>
+                    <dt className="text-muted-foreground">
+                      {job.jobMode === 'import' ? 'Source:' : 'Left folder:'}
+                    </dt>
+                    <dd>
+                      {srcEndpoint ? (
+                        <span className="flex flex-col gap-0.5">
+                          <span className="font-medium">{srcEndpoint.name}</span>
+                          <span className="text-xs text-muted-foreground font-mono">{job.source}</span>
+                        </span>
+                      ) : (
+                        <span className="font-mono break-all">{job.source}</span>
+                      )}
+                    </dd>
 
-                    <dt className="text-muted-foreground">Destination:</dt>
-                    <dd className="font-mono break-all">{job.destination}</dd>
+                    <dt className="text-muted-foreground">
+                      {job.jobMode === 'import' ? 'Destination:' : 'Right folder:'}
+                    </dt>
+                    <dd>
+                      {dstEndpoint ? (
+                        <span className="flex flex-col gap-0.5">
+                          <span className="font-medium">{dstEndpoint.name}</span>
+                          <span className="text-xs text-muted-foreground font-mono">{job.destination}</span>
+                        </span>
+                      ) : (
+                        <span className="font-mono break-all">{job.destination}</span>
+                      )}
+                    </dd>
 
                     {job.schedule && (
                       <>

@@ -513,6 +513,11 @@ app.get('/api/browse', requireAuth, async (req, res) => {
   res.json({ path: result.path, entries: result.entries })
 })
 
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('[api] Unhandled error:', err)
+  res.status(500).json({ error: 'Internal server error' })
+})
+
 app.get('/api/health', async (_req, res) => {
   res.json({
     ok:     true,
