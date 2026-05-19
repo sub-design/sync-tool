@@ -17,7 +17,7 @@ declare global {
 
 // ── Token resolution ──────────────────────────────────────────────────────────
 
-export async function resolveToken(token: string): Promise<{ userId: string; orgId: string | undefined } | null> {
+export async function resolveToken(token: string): Promise<{ userId: string; orgId: string | undefined; deviceId?: string } | null> {
   const jwtPayload = verifyJwt(token)
   if (jwtPayload) return { userId: jwtPayload.userId, orgId: undefined }
   const row = await usersDb.getUserIdByToken(hashToken(token))
@@ -81,7 +81,7 @@ export function requireRole(minRole: OrgRole) {
 
 // ── WebSocket auth ─────────────────────────────────────────────────────────────
 
-export async function authFromWsRequest(req: IncomingMessage): Promise<{ userId: string; orgId: string | undefined } | null> {
+export async function authFromWsRequest(req: IncomingMessage): Promise<{ userId: string; orgId: string | undefined; deviceId?: string } | null> {
   try {
     const token = wsTokenFromRequest(req)
     if (!token) return null
@@ -91,7 +91,7 @@ export async function authFromWsRequest(req: IncomingMessage): Promise<{ userId:
     // Allow ?org= query param to scope the WS session
     const url = new URL(req.url ?? '/', 'http://localhost')
     const orgParam = url.searchParams.get('org') ?? undefined
-    return { userId: result.userId, orgId: orgParam ?? result.orgId }
+    return { userId: result.userId, orgId: orgParam ?? result.orgId, deviceId: result.deviceId }
   } catch {
     return null
   }

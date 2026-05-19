@@ -426,7 +426,7 @@ export const usersDb = {
     return row ? { id: row.id, name: row.name } : undefined
   },
 
-  async getUserIdByToken(tokenHash: string): Promise<{ userId: string; orgId: string | undefined } | undefined> {
+  async getUserIdByToken(tokenHash: string): Promise<{ userId: string; orgId: string | undefined; deviceId: string } | undefined> {
     const now = Date.now()
     const [row] = await sql`
       SELECT id, user_id, org_id, expires_at, revoked_at
@@ -436,7 +436,7 @@ export const usersDb = {
     if (!row || row.revoked_at != null) return undefined
     if (row.expires_at != null && Number(row.expires_at) <= now) return undefined
     await sql`UPDATE agent_tokens SET last_used_at = ${now} WHERE id = ${row.id}`
-    return { userId: row.user_id as string, orgId: (row.org_id as string) ?? undefined }
+    return { userId: row.user_id as string, orgId: (row.org_id as string) ?? undefined, deviceId: row.id as string }
   },
 
   async getDevice(id: string, orgId?: string): Promise<{ id: string; name: string; createdAt: number; expiresAt?: number; lastUsedAt?: number; os?: string; hostname?: string; ipAddress?: string; agentVersion?: string; lastSeen?: number; status?: string; tags?: DeviceTags } | undefined> {

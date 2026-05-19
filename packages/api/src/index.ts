@@ -3,7 +3,7 @@ import express from 'express'
 import cors from 'cors'
 import http from 'http'
 import { WebSocketServer, WebSocket } from 'ws'
-import { initDb, jobsDb, logDb, type SyncLogFile } from './db'
+import { initDb, jobsDb, logDb, usersDb, type SyncLogFile } from './db'
 import { createJobsRouter } from './routes/jobs'
 import { createAuthRouter } from './routes/auth'
 import { createDevicesRouter } from './routes/devices'
@@ -248,7 +248,7 @@ function broadcastToBrowsers(msg: ServerToBrowser, userId?: string) {
 
 // ── Agent WebSocket ───────────────────────────────────────────────────────────
 
-agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { userId: string; orgId?: string }) => {
+agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { userId: string; orgId?: string; deviceId?: string }) => {
   const { userId, orgId } = auth
   let deviceId = ''
 
@@ -258,8 +258,14 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
 
     switch (msg.type) {
       case 'register': {
-        deviceId = msg.deviceId
+        deviceId = auth.deviceId ?? msg.deviceId
         agents.set(deviceId, { ws, userId, orgId, deviceId, hostname: msg.hostname, platform: msg.platform })
+        void usersDb.updateDeviceMetadata(deviceId, {
+          hostname: msg.hostname,
+          os:       msg.platform,
+          lastSeen: Date.now(),
+          status:   'online',
+        })
         ws.send(JSON.stringify({ type: 'registered', ok: true } satisfies ServerToAgent))
         broadcastToBrowsers({ type: 'agent:online', deviceId, hostname: msg.hostname }, userId)
         auditSystem('agent.connected', {
@@ -430,6 +436,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
     if (deviceId) {
       const conn = agents.get(deviceId)
       agents.delete(deviceId)
+      void usersDb.updateDeviceMetadata(deviceId, { lastSeen: Date.now(), status: 'offline' })
       broadcastToBrowsers({ type: 'agent:offline', deviceId }, conn?.userId)
       void markOwnedJobsFailed(deviceId, 'Agent disconnected before the job finished')
       auditSystem('agent.disconnected', {
