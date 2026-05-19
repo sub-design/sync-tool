@@ -269,6 +269,14 @@ export function browseDir(deviceId: string, path: string): Promise<{ path: strin
   return apiFetch(`/api/browse?${qs}`)
 }
 
+export function createBrowseFolder(deviceId: string, path: string, name: string): Promise<{ path: string }> {
+  return apiFetch('/api/browse/folder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId, path, name }),
+  })
+}
+
 export function listAudit(limit = 100): Promise<AuditEntry[]> {
   return apiFetch(`/api/audit?limit=${limit}`)
 }

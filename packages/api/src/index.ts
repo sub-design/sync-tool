@@ -152,6 +152,12 @@ interface BrowsePending {
 }
 const browsePending = new Map<string, BrowsePending>()
 
+interface BrowseCreateFolderPending {
+  resolve: (result: { path: string; error?: string }) => void
+  timer:   ReturnType<typeof setTimeout>
+}
+const browseCreateFolderPending = new Map<string, BrowseCreateFolderPending>()
+
 function sendToAgent(deviceId: string, msg: ServerToAgent): boolean {
   const conn = agents.get(deviceId)
   if (!conn || conn.ws.readyState !== WebSocket.OPEN) return false
@@ -338,6 +344,16 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
         break
       }
 
+      case 'browse:create-folder:result': {
+        const pending = browseCreateFolderPending.get(msg.requestId)
+        if (pending) {
+          clearTimeout(pending.timer)
+          browseCreateFolderPending.delete(msg.requestId)
+          pending.resolve({ path: msg.path, error: msg.error })
+        }
+        break
+      }
+
       case 'job:rollback:progress': {
         const jUid = await jobsDb.getUserId(msg.jobId)
         broadcastToBrowsers({
@@ -512,6 +528,69 @@ app.get('/api/browse', requireAuth, async (req, res) => {
   })
   res.json({ path: result.path, entries: result.entries })
 })
+
+app.post('/api/browse/folder', requireAuth, async (req, res) => {
+  const userId     = req.userId
+  const deviceId   = req.body?.deviceId as string | undefined
+  const parentPath = (req.body?.path as string | undefined) ?? '~'
+  const name       = (req.body?.name as string | undefined)?.trim() ?? ''
+
+  if (!isValidFolderName(name)) {
+    res.status(400).json({ error: 'Invalid folder name' })
+    return
+  }
+
+  const target = deviceId
+    ? agents.get(deviceId)
+    : [...agents.values()].find(a => a.userId === userId)
+
+  if (!target || target.userId !== userId) {
+    auditRequest(req, 'browse.create_folder.rejected', {
+      targetType: 'device',
+      targetId:   deviceId,
+      metadata:   { path: parentPath, name, reason: 'agent_not_found_or_offline' },
+    })
+    res.status(404).json({ error: 'Agent not found or offline' })
+    return
+  }
+
+  const requestId = `browse_mkdir_${Date.now()}_${Math.random().toString(36).slice(2)}`
+
+  const result = await new Promise<{ path: string; error?: string }>((resolve) => {
+    const timer = setTimeout(() => {
+      browseCreateFolderPending.delete(requestId)
+      resolve({ path: parentPath, error: 'Agent did not respond in time' })
+    }, 10_000)
+    browseCreateFolderPending.set(requestId, { resolve, timer })
+    target.ws.send(JSON.stringify({
+      type: 'browse:create-folder',
+      requestId,
+      parentPath,
+      name,
+    } satisfies ServerToAgent))
+  })
+
+  if (result.error) {
+    auditRequest(req, 'browse.create_folder.failed', {
+      targetType: 'device',
+      targetId:   target.deviceId,
+      metadata:   { path: parentPath, name, error: result.error },
+    })
+    res.status(502).json({ error: result.error })
+    return
+  }
+
+  auditRequest(req, 'browse.create_folder.succeeded', {
+    targetType: 'device',
+    targetId:   target.deviceId,
+    metadata:   { path: parentPath, name, createdPath: result.path },
+  })
+  res.status(201).json({ path: result.path })
+})
+
+function isValidFolderName(name: string): boolean {
+  return !!name && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
+}
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('[api] Unhandled error:', err)
