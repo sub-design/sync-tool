@@ -82,6 +82,8 @@ function _spawnAgent(): void {
       API_URL:      agentWsUrl(cfg.wsUrl),
       AGENT_TOKEN:  cfg.agentToken,
       DEVICE_ID:    cfg.deviceId,
+      ...(cfg.relayUrl ? { RELAY_URL: cfg.relayUrl } : {}),
+      ...(cfg.relayToken ? { RELAY_TOKEN: cfg.relayToken } : {}),
     },
     detached: false,
     stdio: ['ignore', 'pipe', 'pipe'],

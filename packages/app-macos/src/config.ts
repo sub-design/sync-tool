@@ -9,6 +9,8 @@ export interface AppConfig {
   agentToken: string
   deviceId:   string
   deviceName: string
+  relayUrl:   string
+  relayToken: string
   email?:     string
 }
 
@@ -22,6 +24,8 @@ const DEFAULTS: AppConfig = {
   agentToken: '',
   deviceId:   '',
   deviceName: require('os').hostname(),
+  relayUrl:   '',
+  relayToken: '',
 }
 
 let _cache: AppConfig | null = null
@@ -66,5 +70,6 @@ function normalizeConfig(cfg: AppConfig): AppConfig {
     apiUrl: cfg.apiUrl.replace(/\/$/, ''),
     wsUrl:  browserWsUrl(cfg.wsUrl),
     webUrl: cfg.webUrl.replace(/\/$/, ''),
+    relayUrl: cfg.relayUrl.replace(/\/$/, ''),
   }
 }
