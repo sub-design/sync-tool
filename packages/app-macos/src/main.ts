@@ -77,6 +77,37 @@ function apiGet<T>(url: string, token?: string): Promise<T> {
   })
 }
 
+interface RelayConfigResponse {
+  enabled?: boolean
+  relayUrl?: string
+  relayToken?: string
+}
+
+async function fetchManagedRelayConfig(apiUrl: string, token: string): Promise<Pick<RelayConfigResponse, 'relayUrl' | 'relayToken'>> {
+  try {
+    const relay = await apiGet<RelayConfigResponse>(`${apiUrl}/api/relay-config`, token)
+    return {
+      relayUrl:   typeof relay.relayUrl === 'string' ? relay.relayUrl : '',
+      relayToken: typeof relay.relayToken === 'string' ? relay.relayToken : '',
+    }
+  } catch (err) {
+    console.warn(`[app] Failed to fetch relay config: ${err instanceof Error ? err.message : String(err)}`)
+    return {}
+  }
+}
+
+async function refreshManagedRelayConfig(): Promise<boolean> {
+  const cfg = getConfig()
+  if (!cfg.apiUrl || !cfg.agentToken) return false
+
+  const relay = await fetchManagedRelayConfig(cfg.apiUrl, cfg.agentToken)
+  if (!relay.relayUrl || !relay.relayToken) return false
+  if (relay.relayUrl === cfg.relayUrl && relay.relayToken === cfg.relayToken) return false
+
+  saveConfig({ ...cfg, relayUrl: relay.relayUrl, relayToken: relay.relayToken })
+  return true
+}
+
 let logoffJobsTriggered = false
 
 async function triggerLogoffJobs(reason: string): Promise<void> {
@@ -146,17 +177,19 @@ ipcMain.handle('config:login', async (_event, { apiUrl, email, password, deviceN
   const token = loginRes.token as string
   const deviceRes = await apiPost(`${apiUrl}/api/devices`, { name: deviceName }, token)
   if (deviceRes.error) throw new Error(deviceRes.error as string)
+  const agentToken = deviceRes.token as string
+  const managedRelay = await fetchManagedRelayConfig(apiUrl, agentToken)
 
   const cfg = getConfig()
   saveConfig({
     ...cfg,
     apiUrl,
     wsUrl:      apiUrl.replace(/^http/, 'ws'),
-    agentToken: deviceRes.token as string,
+    agentToken,
     deviceName,
     deviceId:   cfg.deviceId || uuid(),
-    relayUrl:   relayUrl ?? cfg.relayUrl,
-    relayToken: relayToken ?? cfg.relayToken,
+    relayUrl:   relayUrl || managedRelay.relayUrl || cfg.relayUrl,
+    relayToken: relayToken || managedRelay.relayToken || cfg.relayToken,
     email,
   })
   disconnect()
@@ -241,7 +274,12 @@ app.whenReady().then(() => {
 
   // Auto-start agent if token is configured
   if (getConfig().agentToken) {
-    startAgent()
+    refreshManagedRelayConfig()
+      .then((changed) => {
+        if (changed) restartAgent()
+        else startAgent()
+      })
+      .catch(() => startAgent())
   }
 
   // First run: open preferences if no token

@@ -152,16 +152,17 @@
       <label>Device ID</label>
       <input id="deviceId" type="text" readonly />
     </div>
-    <hr class="separator" />
-    <div class="field">
-      <label for="relayUrlEdit">Relay URL</label>
-      <input id="relayUrlEdit" type="url" placeholder="wss://your-relay.example.com" />
-      <div class="hint">Required for two-device folder sync.</div>
-    </div>
-    <div class="field">
-      <label for="relayTokenEdit">Relay Token</label>
-      <input id="relayTokenEdit" type="password" placeholder="Relay namespace token" />
-    </div>
+    <details id="connectedAdvancedSection" style="margin-top: 10px">
+      <summary style="font-size: 12px; color: #888; cursor: pointer; user-select: none">Advanced</summary>
+      <div class="field" style="margin-top: 10px">
+        <label for="relayUrlEdit">Relay URL</label>
+        <input id="relayUrlEdit" type="url" placeholder="Managed by server" />
+      </div>
+      <div class="field">
+        <label for="relayTokenEdit">Relay Token</label>
+        <input id="relayTokenEdit" type="password" placeholder="Managed by server" />
+      </div>
+    </details>
     <div class="actions">
       <button class="btn-cancel" id="btnCancelConnected">Cancel</button>
       <button class="btn-primary" id="btnSave">Save</button>

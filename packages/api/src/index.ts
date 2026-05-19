@@ -461,6 +461,14 @@ app.use('/api/audit',     createAuditRouter())
 app.use('/api/endpoints', createEndpointsRouter())
 app.use('/api/job-templates', createJobTemplatesRouter())
 app.use('/api/collections',  createCollectionsRouter())
+app.get('/api/relay-config', requireAuth, (req, res) => {
+  const relayUrl = relayUrlForRequest(req)
+  res.json({
+    enabled: Boolean(relayUrl && process.env.MANAGED_RELAY_TOKEN),
+    relayUrl,
+    relayToken: relayUrl ? process.env.MANAGED_RELAY_TOKEN ?? '' : '',
+  })
+})
 app.use('/api/jobs',    createJobsRouter(
   async (msg, reason = 'manual') => {
     if (msg.type === 'job:run')    await queueJob(msg.job, reason)
@@ -590,6 +598,17 @@ app.post('/api/browse/folder', requireAuth, async (req, res) => {
 
 function isValidFolderName(name: string): boolean {
   return !!name && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
+}
+
+function relayUrlForRequest(req: express.Request): string {
+  const configured = (process.env.MANAGED_RELAY_URL ?? '').trim()
+  if (configured) return configured.replace(/\/$/, '')
+
+  if (process.env.MANAGED_RELAY_SAME_HOST !== 'true') return ''
+  const host = req.get('host')
+  if (!host) return ''
+  const secure = requestArrivedSecurely(req)
+  return `${secure ? 'wss' : 'ws'}://${host}/relay`
 }
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
