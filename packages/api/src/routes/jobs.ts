@@ -45,7 +45,7 @@ async function withResolvedEndpoints(job: Job, userId: string, orgId?: string): 
 }
 
 export function createJobsRouter(
-  broadcast:        (msg: ServerToAgent, reason?: QueueReason) => void,
+  broadcast:        (msg: ServerToAgent, reason?: QueueReason) => boolean | Promise<boolean>,
   sendToAgent:      (deviceId: string, msg: ServerToAgent) => boolean,
   pendingRollbacks: Map<string, number>,
   onJobsChanged:    () => void = () => {},
@@ -174,7 +174,10 @@ export function createJobsRouter(
     // Re-resolve named endpoint configs at run time so changes to an endpoint
     // propagate to all jobs that reference it without requiring a job edit.
     const resolvedJob = await withResolvedEndpoints(job, req.userId, req.orgId)
-    broadcast({ type: 'job:run', job: resolvedJob }, reason)
+    const queued = await broadcast({ type: 'job:run', job: resolvedJob }, reason)
+    if (!queued) {
+      res.status(502).json({ error: 'No agent is available to run this job' }); return
+    }
     auditRequest(req, 'job.run_requested', {
       targetType: 'job',
       targetId:   job.id,

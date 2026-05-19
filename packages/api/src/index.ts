@@ -138,6 +138,10 @@ interface AgentConn {
 
 const agents = new Map<string, AgentConn>()
 
+// jobId -> deviceId for jobs that have been dispatched to an agent and have not
+// reached a terminal state yet.
+const activeJobOwners = new Map<string, string>()
+
 // jobId → logId for in-flight rollbacks (correlates agent response with DB row)
 const pendingRollbacks = new Map<string, number>()
 
@@ -170,27 +174,41 @@ function initiatingDeviceId(job: Job): string | undefined {
   return job.direction === 'rtl' ? job.destinationDeviceId : job.sourceDeviceId
 }
 
-async function broadcastJobRun(job: Job) {
+async function broadcastJobRun(job: Job): Promise<boolean> {
   const target = initiatingDeviceId(job)
   if (target) {
-    if (!sendToAgent(target, { type: 'job:run', job }))
+    if (!sendToAgent(target, { type: 'job:run', job })) {
       console.warn(`[api] Target agent ${target} offline — job ${job.id} not dispatched`)
-    return
+      return false
+    }
+    activeJobOwners.set(job.id, target)
+    return true
   }
   for (const [, conn] of agents) {
     if (conn.ws.readyState === WebSocket.OPEN) {
       conn.ws.send(JSON.stringify({ type: 'job:run', job } satisfies ServerToAgent))
-      return
+      activeJobOwners.set(job.id, conn.deviceId)
+      return true
     }
   }
   console.warn(`[api] No agents online — job ${job.id} not dispatched`)
+  return false
 }
 
 async function queueJob(job: Job, reason: QueueReason): Promise<boolean> {
   if (job.status === 'running' || job.status === 'queued') return false
   await jobsDb.setStatus(job.id, 'queued')
   const queued = { ...job, status: 'queued' as const }
-  await broadcastJobRun(queued)
+  const dispatched = await broadcastJobRun(queued)
+  if (!dispatched) {
+    const error = initiatingDeviceId(job)
+      ? 'Target agent is offline'
+      : 'No agent connected'
+    await jobsDb.setStatus(job.id, 'error', error)
+    await logDb.fail(job.id, error)
+    broadcastToBrowsers({ type: 'job:error', jobId: job.id, error }, await jobsDb.getUserId(job.id))
+    return false
+  }
   broadcastToBrowsers({ type: 'job:status', jobId: job.id, status: 'queued' })
   console.log(`[api] Job ${job.id} queued by ${reason}`)
   return true
@@ -257,6 +275,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
         const all    = orgId ? await jobsDb.listForOrg(orgId) : await jobsDb.listForUser(userId)
         const queued = all.filter((j) => j.status === 'queued')
         for (const job of queued) ws.send(JSON.stringify({ type: 'job:run', job } satisfies ServerToAgent))
+        for (const job of queued) activeJobOwners.set(job.id, deviceId)
         break
       }
       case 'job:progress': {
@@ -296,6 +315,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
         const { result } = msg
         const job  = await jobsDb.get(result.jobId)
         const jUid = await jobsDb.getUserId(result.jobId)
+        activeJobOwners.delete(result.jobId)
         await jobsDb.setStatus(result.jobId, 'completed')
         const logId = await logDb.create(result.jobId)
         await logDb.complete(logId, result)
@@ -315,6 +335,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
       case 'job:cancelled': {
         const job  = await jobsDb.get(msg.jobId)
         const jUid = await jobsDb.getUserId(msg.jobId)
+        activeJobOwners.delete(msg.jobId)
         await jobsDb.setStatus(msg.jobId, 'cancelled')
         await logDb.cancel(msg.jobId)
         inFlightFiles.delete(msg.jobId)
@@ -325,6 +346,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
       case 'job:error': {
         const job  = await jobsDb.get(msg.jobId)
         const jUid = await jobsDb.getUserId(msg.jobId)
+        activeJobOwners.delete(msg.jobId)
         await jobsDb.setStatus(msg.jobId, 'error', msg.error)
         await logDb.fail(msg.jobId, msg.error)
         inFlightFiles.delete(msg.jobId)
@@ -409,6 +431,7 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
       const conn = agents.get(deviceId)
       agents.delete(deviceId)
       broadcastToBrowsers({ type: 'agent:offline', deviceId }, conn?.userId)
+      void markOwnedJobsFailed(deviceId, 'Agent disconnected before the job finished')
       auditSystem('agent.disconnected', {
         userId:     conn?.userId,
         actorType:  'agent',
@@ -420,6 +443,42 @@ agentWss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, auth: { us
     }
   })
 })
+
+async function markOwnedJobsFailed(deviceId: string, error: string): Promise<void> {
+  const ownedJobIds = [...activeJobOwners.entries()]
+    .filter(([, ownerDeviceId]) => ownerDeviceId === deviceId)
+    .map(([jobId]) => jobId)
+
+  for (const jobId of ownedJobIds) {
+    activeJobOwners.delete(jobId)
+    const job = await jobsDb.get(jobId)
+    if (!job || (job.status !== 'running' && job.status !== 'queued')) continue
+
+    const jUid = await jobsDb.getUserId(jobId)
+    await jobsDb.setStatus(jobId, 'error', error)
+    await logDb.fail(jobId, error)
+    inFlightFiles.delete(jobId)
+    broadcastToBrowsers({ type: 'job:error', jobId, error }, jUid)
+    void notifyJob(job, { status: 'error', jobId, error })
+    console.warn(`[api] Job ${jobId} failed: ${error}`)
+  }
+}
+
+async function recoverInterruptedJobs(): Promise<void> {
+  const error = 'API restarted before the job finished'
+  const activeJobs = (await jobsDb.list()).filter((job) => job.status === 'running' || job.status === 'queued')
+
+  for (const job of activeJobs) {
+    const jUid = await jobsDb.getUserId(job.id)
+    await jobsDb.setStatus(job.id, 'error', error)
+    await logDb.fail(job.id, error)
+    inFlightFiles.delete(job.id)
+    activeJobOwners.delete(job.id)
+    broadcastToBrowsers({ type: 'job:error', jobId: job.id, error }, jUid)
+    void notifyJob(job, { status: 'error', jobId: job.id, error })
+    console.warn(`[api] Recovered interrupted job ${job.id}: ${error}`)
+  }
+}
 
 // ── Browser WebSocket ─────────────────────────────────────────────────────────
 
@@ -471,11 +530,13 @@ app.get('/api/relay-config', requireAuth, (req, res) => {
 })
 app.use('/api/jobs',    createJobsRouter(
   async (msg, reason = 'manual') => {
-    if (msg.type === 'job:run')    await queueJob(msg.job, reason)
+    if (msg.type === 'job:run') return await queueJob(msg.job, reason)
     if (msg.type === 'job:cancel') {
       broadcastJobCancel(msg.jobId)
       broadcastToBrowsers({ type: 'job:cancelled', jobId: msg.jobId })
+      return true
     }
+    return false
   },
   sendToAgent,
   pendingRollbacks,
@@ -629,6 +690,7 @@ app.get('/api/health', async (_req, res) => {
 async function main() {
   await initDb()
   console.log('[api] Database ready')
+  await recoverInterruptedJobs()
 
   setInterval(() => { void checkScheduledJobs() }, schedulerPollMs()).unref()
   void queueStartupJobs()
