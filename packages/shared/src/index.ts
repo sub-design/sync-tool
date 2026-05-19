@@ -293,6 +293,7 @@ export type AgentToServer =
   | { type: 'job:cancelled'; jobId: string }
   | { type: 'job:error';     jobId: string; error: string }
   | { type: 'browse:result'; requestId: string; path: string; entries: DirEntry[]; error?: string }
+  | { type: 'browse:create-folder:result'; requestId: string; path: string; error?: string }
   | { type: 'job:rollback:progress'; jobId: string; filesRestored: number; filesTotal: number; currentFile: string }
   | { type: 'job:rollback:complete'; jobId: string; result: RollbackResult }
   | { type: 'job:rollback:error';    jobId: string; error: string }
@@ -303,6 +304,7 @@ export type ServerToAgent =
   | { type: 'job:run';         job: Job }
   | { type: 'job:cancel';      jobId: string }
   | { type: 'browse:request';  requestId: string; path: string }
+  | { type: 'browse:create-folder'; requestId: string; parentPath: string; name: string }
   | { type: 'job:rollback';    job: Job; logId: string; manifest: RollbackManifest }
 
 // ─────────────────────────────────────────────

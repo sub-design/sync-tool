@@ -1,18 +1,22 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, type FormEvent } from 'react'
 import {
   ChevronRight, ChevronDown, Folder, FolderOpen,
   HardDrive, ChevronLeft, Home, Loader2, AlertCircle,
-  Check, Monitor, Download, FileText, Image, Film, Music
+  Check, Monitor, Download, FileText, Image, Film, Music,
+  FolderPlus, RefreshCw, X
 } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import {
   DropdownMenu, DropdownMenuContent,
   DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { useBrowse } from '@/hooks/useBrowse'
+import { invalidateBrowseCache, useBrowse } from '@/hooks/useBrowse'
+import { createBrowseFolder } from '@/lib/api'
 import { useWsStore } from '@/lib/ws'
 import type { DirEntry } from '../types'
 
@@ -287,6 +291,11 @@ export function FolderPickerDialog({
   const [currentPath, setCurrentPath] = useState(defaultPath)
   const [history,    setHistory]    = useState<string[]>([defaultPath])
   const [histIdx,    setHistIdx]    = useState(0)
+  const [browseVersion, setBrowseVersion] = useState(0)
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [createLoading, setCreateLoading] = useState(false)
 
   // When dialog opens, reset to initial values
   const handleOpenChange = (v: boolean) => {
@@ -297,19 +306,29 @@ export function FolderPickerDialog({
       setCurrentPath(p)
       setHistory([p])
       setHistIdx(0)
+      setBrowseVersion(v => v + 1)
+      resetCreateFolder()
     }
     onOpenChange(v)
   }
 
+  const resetCreateFolder = useCallback(() => {
+    setIsCreatingFolder(false)
+    setNewFolderName('')
+    setCreateError(null)
+    setCreateLoading(false)
+  }, [])
+
   const navigate = useCallback((path: string) => {
     setCurrentPath(path)
+    resetCreateFolder()
     setHistory(h => {
       const next = h.slice(0, histIdx + 1)
       next.push(path)
       setHistIdx(next.length - 1)
       return next
     })
-  }, [histIdx])
+  }, [histIdx, resetCreateFolder])
 
   const goBack = () => {
     if (histIdx > 0) {
@@ -333,6 +352,8 @@ export function FolderPickerDialog({
     setCurrentPath(home)
     setHistory([home])
     setHistIdx(0)
+    setBrowseVersion(v => v + 1)
+    resetCreateFolder()
   }
 
   const hostname = agentsOnline.get(deviceId) ?? deviceId
@@ -340,6 +361,46 @@ export function FolderPickerDialog({
   const handleSelect = () => {
     onSelect(deviceId, currentPath)
     onOpenChange(false)
+  }
+
+  const refreshCurrentFolder = useCallback(() => {
+    if (!deviceId) return
+    invalidateBrowseCache(deviceId, currentPath)
+    setBrowseVersion(v => v + 1)
+  }, [deviceId, currentPath])
+
+  const handleCreateFolder = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!deviceId || createLoading) return
+
+    const name = newFolderName.trim()
+    if (!isValidFolderName(name)) {
+      setCreateError('Use a folder name without slashes')
+      return
+    }
+
+    setCreateLoading(true)
+    setCreateError(null)
+    try {
+      const created = await createBrowseFolder(deviceId, currentPath, name)
+      invalidateBrowseCache(deviceId, currentPath)
+      resetCreateFolder()
+      setBrowseVersion(v => v + 1)
+      setCurrentPath(created.path)
+      setHistory(h => {
+        const next = h.slice(0, histIdx + 1)
+        next.push(created.path)
+        setHistIdx(next.length - 1)
+        return next
+      })
+      toast.success('Folder created')
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to create folder'
+      setCreateError(message)
+      toast.error(message)
+    } finally {
+      setCreateLoading(false)
+    }
   }
 
   return (
@@ -400,6 +461,25 @@ export function FolderPickerDialog({
           >
             <Home size={15} />
           </Button>
+          <Button
+            variant="ghost" size="icon" className="size-7 shrink-0"
+            onClick={refreshCurrentFolder}
+            disabled={!deviceId}
+            title="Refresh"
+          >
+            <RefreshCw size={15} />
+          </Button>
+          <Button
+            variant="ghost" size="icon" className="size-7 shrink-0"
+            onClick={() => {
+              setIsCreatingFolder(true)
+              setCreateError(null)
+            }}
+            disabled={!deviceId}
+            title="New folder"
+          >
+            <FolderPlus size={15} />
+          </Button>
           <div className="flex-1 min-w-0">
             <Breadcrumb path={currentPath === '~' ? '~' : currentPath} onNavigate={navigate} />
           </div>
@@ -415,6 +495,7 @@ export function FolderPickerDialog({
                 <>
                   <FavoritesSection activePath={currentPath} onNavigate={navigate} />
                   <FolderTree
+                    key={`${deviceId}:${browseVersion}`}
                     deviceId={deviceId}
                     rootPath="~"
                     activePath={currentPath}
@@ -432,6 +513,7 @@ export function FolderPickerDialog({
             <ScrollArea className="flex-1 h-0">
               {deviceId ? (
                 <FolderList
+                  key={`${deviceId}:${currentPath}:${browseVersion}`}
                   deviceId={deviceId}
                   path={currentPath}
                   onNavigate={navigate}
@@ -443,10 +525,34 @@ export function FolderPickerDialog({
               )}
             </ScrollArea>
 
-            {/* Double-click hint */}
-            <p className="px-4 py-1.5 text-xs text-muted-foreground border-t border-border shrink-0">
-              Double-click a folder to open it
-            </p>
+            {isCreatingFolder ? (
+              <form
+                className="flex items-center gap-2 px-3 py-2 border-t border-border shrink-0"
+                onSubmit={handleCreateFolder}
+              >
+                <Input
+                  autoFocus
+                  className="h-8"
+                  value={newFolderName}
+                  onChange={(event) => {
+                    setNewFolderName(event.target.value)
+                    setCreateError(null)
+                  }}
+                  placeholder="Folder name"
+                />
+                <Button type="submit" size="sm" disabled={createLoading}>
+                  {createLoading ? <Loader2 size={14} className="animate-spin" /> : 'Create'}
+                </Button>
+                <Button type="button" variant="ghost" size="icon" className="size-8" onClick={resetCreateFolder}>
+                  <X size={15} />
+                </Button>
+                {createError && <span className="text-xs text-destructive truncate">{createError}</span>}
+              </form>
+            ) : (
+              <p className="px-4 py-1.5 text-xs text-muted-foreground border-t border-border shrink-0">
+                Double-click a folder to open it
+              </p>
+            )}
           </div>
         </div>
 
@@ -467,4 +573,8 @@ export function FolderPickerDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function isValidFolderName(name: string): boolean {
+  return !!name && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
 }

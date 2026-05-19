@@ -131,6 +131,10 @@ function connect() {
         await handleBrowse(ws, msg.requestId, msg.path)
         break
 
+      case 'browse:create-folder':
+        await handleCreateFolder(ws, msg.requestId, msg.parentPath, msg.name)
+        break
+
       case 'job:rollback':
         void handleRollback(ws, msg.job, msg.logId, msg.manifest)
         break
@@ -340,6 +344,30 @@ async function handleBrowse(ws: WebSocket, requestId: string, rawPath: string) {
   } catch (err: any) {
     send(ws, { type: 'browse:result', requestId, path: resolved, entries: [], error: err.message })
   }
+}
+
+async function handleCreateFolder(ws: WebSocket, requestId: string, rawParentPath: string, rawName: string) {
+  let createdPath = rawParentPath
+
+  try {
+    const name = rawName.trim()
+    if (!isValidFolderName(name)) throw new Error('Invalid folder name')
+
+    const allowed = await assertAllowedPath(rawParentPath)
+    const parentPath = allowed.resolvedPath
+    createdPath = path.join(parentPath, name)
+
+    await assertAllowedPath(createdPath)
+    await fs.promises.mkdir(createdPath)
+
+    send(ws, { type: 'browse:create-folder:result', requestId, path: createdPath })
+  } catch (err: any) {
+    send(ws, { type: 'browse:create-folder:result', requestId, path: createdPath, error: err.message })
+  }
+}
+
+function isValidFolderName(name: string): boolean {
+  return !!name && name !== '.' && name !== '..' && !name.includes('/') && !name.includes('\\') && !name.includes('\0')
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
