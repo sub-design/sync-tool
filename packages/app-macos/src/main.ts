@@ -177,6 +177,7 @@ ipcMain.handle('config:login', async (_event, { apiUrl, email, password, deviceN
   const token = loginRes.token as string
   const deviceRes = await apiPost(`${apiUrl}/api/devices`, { name: deviceName }, token)
   if (deviceRes.error) throw new Error(deviceRes.error as string)
+  const deviceId = deviceRes.id as string
   const agentToken = deviceRes.token as string
   const managedRelay = await fetchManagedRelayConfig(apiUrl, agentToken)
 
@@ -187,7 +188,7 @@ ipcMain.handle('config:login', async (_event, { apiUrl, email, password, deviceN
     wsUrl:      apiUrl.replace(/^http/, 'ws'),
     agentToken,
     deviceName,
-    deviceId:   cfg.deviceId || uuid(),
+    deviceId,
     relayUrl:   relayUrl || managedRelay.relayUrl || cfg.relayUrl,
     relayToken: relayToken || managedRelay.relayToken || cfg.relayToken,
     email,
